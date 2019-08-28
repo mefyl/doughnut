@@ -1,5 +1,3 @@
-let rec ( ** ) l = function 0 -> 1 | n -> l * (l ** (n - 1))
-
 module Address = struct
   type t = int
 
@@ -10,7 +8,7 @@ module Address = struct
   let null = 0
 
   let log n =
-    if n >= space_log then failwith "address log out of bound" else 2 ** n
+    if n >= space_log then failwith "address log out of bound" else 1 lsl n
 
   let pp fmt addr = Format.pp_print_int fmt addr
 
