@@ -30,10 +30,33 @@ module VThread = struct
         ()
 end
 
-module Address = Dht.Implementation.Address
+module Address = struct
+  type t = int
+
+  let random () = Random.int 255
+
+  let space_log = 8
+
+  let null = 0
+
+  let log n =
+    if n >= space_log then failwith "address log out of bound" else 1 lsl n
+
+  let pp fmt addr = Format.pp_print_int fmt addr
+
+  let to_string = string_of_int
+
+  module O = struct
+    let ( < ) = Stdlib.( < )
+
+    let ( <= ) = Stdlib.( <= )
+
+    let ( + ) l r = (l + r) mod 256
+  end
+end
 
 module Transport = struct
-  include Dht.Chord.DirectTransport
+  include Dht.Chord.DirectTransport (Address)
 
   type filter = Passthrough | Response of response
 
@@ -54,10 +77,10 @@ module Transport = struct
       t.stats.filtered <- t.stats.filtered + 1 ;
       match Event.sync (call t.query m) with
       | Passthrough ->
-          Dht.Chord.DirectTransport.send () c m
+          send () c m
       | Response r ->
           r )
-    else Dht.Chord.DirectTransport.send () c m
+    else send () c m
 end
 
 module Dht = Dht.Chord.Make (Transport)

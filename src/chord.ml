@@ -1,11 +1,6 @@
-module Address = Implementation.Address
-
-let between addr left right =
-  let open Address.O in
-  if left < right then left < addr && addr <= right
-  else not (right < addr && addr <= left)
-
 module type Transport = sig
+  module Address : Implementation.Address
+
   type t
 
   val make : unit -> t
@@ -43,7 +38,10 @@ module type Transport = sig
   val pp_peer : Format.formatter -> peer -> unit
 end
 
-module Make (T : Transport) = (* : Implementation.Implementation*) struct
+module Make (T : Transport) = (* : Implementation.Implementation*)
+struct
+  module Address = T.Address
+
   type endpoint = T.endpoint
 
   type peer = T.peer
@@ -60,6 +58,11 @@ module Make (T : Transport) = (* : Implementation.Implementation*) struct
     Format.pp_print_string fmt "node(" ;
     Address.pp fmt node.address ;
     Format.pp_print_string fmt ")"
+
+  let between addr left right =
+    let open Address.O in
+    if left < right then left < addr && addr <= right
+    else not (right < addr && addr <= left)
 
   let rec make_details ?(transport = T.make ()) address endpoints =
     Logs.debug (fun m -> m "node(%a): make" Address.pp address) ;
@@ -96,6 +99,7 @@ module Make (T : Transport) = (* : Implementation.Implementation*) struct
         m "node(%a): precedessor: %a" Address.pp address T.pp_peer
           state.predecessor) ;
     let rec thread (server, state) =
+      let open Address.O in
       let respond = function
         | T.Successor addr -> (
             Logs.debug (fun m ->
@@ -184,7 +188,9 @@ module Make (T : Transport) = (* : Implementation.Implementation*) struct
   let endpoint node = T.endpoint node.transport node.server
 end
 
-module DirectTransport = struct
+module DirectTransport (A : Implementation.Address) = struct
+  module Address = A
+
   type t = unit
 
   let make () = ()
@@ -223,5 +229,3 @@ module DirectTransport = struct
 
   let pp_peer fmt (addr, _) = Address.pp fmt addr
 end
-
-module Verify : Transport = DirectTransport
