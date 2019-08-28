@@ -90,21 +90,30 @@ module MakeDetails (T : Transport) = struct
                 T.pp_peer res) ;
           Some res
 
+  let rec successor_query transport addr ep =
+    let client = T.connect transport ep in
+    match T.send transport client (Successor addr) with
+    | Found (successor, predecessor) ->
+        Some (successor, predecessor)
+    | Forward (_, ep) ->
+        (successor_query [@tailcall]) transport addr ep
+    | _ ->
+        failwith "unexpected answer"
+
+  let successor node addr =
+    match finger node.state addr with
+    | None ->
+        None
+    | Some (_, ep) ->
+        successor_query node.transport addr ep
+
   let rec make_details ?(transport = T.make ()) address endpoints =
     Logs.debug (fun m -> m "node(%a): make" Address.pp address) ;
     let server = T.listen transport () in
-    let rec find_successor ep =
-      let client = T.connect transport ep in
-      match T.send transport client (Successor address) with
-      | Found (successor, predecessor) ->
-          Some (successor, predecessor)
-      | Forward (_, ep) ->
-          (find_successor [@tailcall]) ep
-      | _ ->
-          failwith "unexpected answer"
-    in
     let successor, predecessor =
-      match Core.List.find_map ~f:find_successor endpoints with
+      match
+        Core.List.find_map ~f:(successor_query transport address) endpoints
+      with
       | None ->
           Logs.warn (fun m ->
               m "node(%a): could not find predecessor" Address.pp address) ;
