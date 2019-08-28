@@ -38,8 +38,7 @@ module type Transport = sig
   val pp_peer : Format.formatter -> peer -> unit
 end
 
-module Make (T : Transport) = (* : Implementation.Implementation*)
-struct
+module MakeDetails (T : Transport) = struct
   module Address = T.Address
 
   type endpoint = T.endpoint
@@ -187,6 +186,10 @@ struct
 
   let endpoint node = T.endpoint node.transport node.server
 end
+
+module Make (T : Transport) :
+  Implementation.Implementation with type Address.t = T.Address.t =
+  MakeDetails (T)
 
 module DirectTransport (A : Implementation.Address) = struct
   module Address = A

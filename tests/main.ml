@@ -83,7 +83,7 @@ module Transport = struct
     else send () c m
 end
 
-module Dht = Dht.Chord.Make (Transport)
+module Dht = Dht.Chord.MakeDetails (Transport)
 
 let () =
   Logs.set_level (Some Logs.Debug) ;
