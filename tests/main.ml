@@ -30,8 +30,18 @@ module VThread = struct
         ()
 end
 
-module Address = struct
+module Address : Dht.Implementation.Address with type t = int = struct
   type t = int
+
+  let compare = Stdlib.compare
+
+  let sexp_of_t i = Sexp.Atom (string_of_int i)
+
+  let t_of_sexp = function
+    | Sexp.Atom s ->
+        int_of_string s
+    | _ ->
+        failwith "invalid address"
 
   let random () = Random.int 255
 
