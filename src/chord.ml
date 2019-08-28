@@ -63,6 +63,33 @@ module MakeDetails (T : Transport) = struct
     if left < right then left < addr && addr <= right
     else not (right < addr && addr <= left)
 
+  let finger state addr =
+    let open Address.O in
+    if between addr (fst state.predecessor) state.address then (
+      Logs.debug (fun m ->
+          m "%a: address in our space, response is self" pp_node state) ;
+      None )
+    else
+      let f i = function
+        | None ->
+            false
+        | Some _ ->
+            let offset = Address.log (Address.space_log - 1 - i) in
+            addr < state.address + offset
+      in
+      match Core.Array.findi ~f state.finger with
+      | Some (_, lookup) ->
+          let res = Core.Option.value_exn lookup in
+          Logs.debug (fun m ->
+              m "%a: response from finger: %a" pp_node state T.pp_peer res) ;
+          Some res
+      | None ->
+          let res = state.predecessor in
+          Logs.debug (fun m ->
+              m "%a: finger empty, return predecessor: %a" pp_node state
+                T.pp_peer res) ;
+          Some res
+
   let rec make_details ?(transport = T.make ()) address endpoints =
     Logs.debug (fun m -> m "node(%a): make" Address.pp address) ;
     let server = T.listen transport () in
@@ -92,47 +119,24 @@ module MakeDetails (T : Transport) = struct
       let self = (address, T.endpoint transport server) in
       { address
       ; predecessor= Core.Option.value predecessor ~default:self
-      ; finger= Array.make Address.space_log None }
+      ; finger= Stdlib.Array.make Address.space_log None }
     in
     Logs.debug (fun m ->
         m "node(%a): precedessor: %a" Address.pp address T.pp_peer
           state.predecessor) ;
     let rec thread (server, state) =
-      let open Address.O in
       let respond = function
         | T.Successor addr -> (
             Logs.debug (fun m ->
                 m "%a: query: successor %a" pp_node state Address.pp addr) ;
-            let self =
-              T.Found
-                ( (state.address, T.endpoint transport server)
-                , Some state.predecessor )
-            in
-            if between addr (fst state.predecessor) state.address then (
-              Logs.debug (fun m ->
-                  m "%a: address in our space, response is self" pp_node state) ;
-              (self, state) )
-            else
-              let f i = function
-                | None ->
-                    false
-                | Some _ ->
-                    let offset = Address.log (Address.space_log - 1 - i) in
-                    addr < state.address + offset
-              in
-              match Core.Array.findi ~f state.finger with
-              | Some (_, lookup) ->
-                  let res = Core.Option.value_exn lookup in
-                  Logs.debug (fun m ->
-                      m "%a: response from finger: %a" pp_node state T.pp_peer
-                        res) ;
-                  (T.Forward res, state)
-              | None ->
-                  let res = state.predecessor in
-                  Logs.debug (fun m ->
-                      m "%a: finger empty, return predecessor: %a" pp_node
-                        state T.pp_peer res) ;
-                  (T.Forward res, state) )
+            match finger state addr with
+            | None ->
+                ( T.Found
+                    ( (state.address, T.endpoint transport server)
+                    , Some state.predecessor )
+                , state )
+            | Some peer ->
+                (T.Forward peer, state) )
         | T.Hello {self= addr, ep; predecessor} ->
             Logs.debug (fun m ->
                 m "%a: query: hello %a (%a)" pp_node state Address.pp addr

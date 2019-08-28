@@ -1,3 +1,5 @@
+open Core
+
 type ('a, 'b) vchannel = 'a Event.channel * 'b Event.channel
 
 let new_vchannel () = (Event.new_channel (), Event.new_channel ())
@@ -9,7 +11,7 @@ module VThread = struct
   type t =
     { thread: Thread.t
     ; exn: exn option ref
-    ; bt: Printexc.raw_backtrace option ref }
+    ; bt: Stdlib.Printexc.raw_backtrace option ref }
 
   let create f a =
     let exn = ref None and bt = ref None in
@@ -17,7 +19,7 @@ module VThread = struct
       try f a
       with e ->
         exn := Some e ;
-        bt := Some (Printexc.get_raw_backtrace ())
+        bt := Some (Stdlib.Printexc.get_raw_backtrace ())
     in
     {thread= Thread.create f a; exn; bt}
 
@@ -25,7 +27,8 @@ module VThread = struct
     Thread.join t.thread ;
     match !(t.exn) with
     | Some exn ->
-        Printexc.raise_with_backtrace exn (Core.Option.value_exn !(t.bt))
+        Stdlib.Printexc.raise_with_backtrace exn
+          (Core.Option.value_exn !(t.bt))
     | None ->
         ()
 end
