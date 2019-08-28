@@ -3,4 +3,5 @@
   (modules
     chord
     implementation)
+  (modules_without_implementation implementation)
   (libraries core logs threads.posix))
