@@ -1,0 +1,9 @@
+(executable
+  (name main)
+  (libraries dht logs logs.threaded oUnit))
+
+(alias
+  (name check)
+  (deps main.exe)
+  (action
+  (run ./main.exe)))
