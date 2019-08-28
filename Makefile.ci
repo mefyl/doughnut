@@ -1,0 +1,34 @@
+OPAM=$(HOME)/.local/bin/opam
+OPAM_INIT=$(HOME)/.opam
+OCAML=$(HOME)/.local/bin/ocaml
+
+ocaml: $(OCAML)
+
+$(OCAML):
+	mkdir -p /tmp/ocaml
+	cd /tmp/ocaml && \
+	wget http://caml.inria.fr/pub/distrib/ocaml-$(OCAML_VERSION)/ocaml-$(OCAML_VERSION).0.tar.gz && \
+	tar -xzf ocaml-$(OCAML_VERSION).0.tar.gz && \
+	cd ocaml-$(OCAML_VERSION).0 && \
+	./configure -prefix $(HOME)/.local && \
+	make world.opt && \
+	make install
+
+opam: $(OPAM)
+
+$(OPAM): $(OCAML)
+	mkdir -p /tmp/opam
+	cd /tmp/opam && \
+	wget https://github.com/ocaml/opam/releases/download/$(OPAM_VERSION)/opam-full-$(OPAM_VERSION).tar.gz && \
+	tar -xzf opam-full-$(OPAM_VERSION).tar.gz && \
+	cd opam-full-$(OPAM_VERSION) && \
+	./configure --prefix=$(HOME)/.local && \
+	make lib-ext && \
+	make all && \
+	make install
+
+$(OPAM_INIT): $(OPAM)
+	$(OPAM) init --disable-sandboxing --no-setup
+
+dependencies: $(OPAM_INIT)
+	$(OPAM) install --yes core dune logs ounit

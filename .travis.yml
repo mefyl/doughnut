@@ -1,0 +1,18 @@
+language: c
+sudo: false
+
+cache:
+  directories:
+  - $HOME/.opam
+  - $HOME/.local
+
+env:
+  - OPAM_VERSION="2.0.5" OCAML_VERSION="4.08"
+
+install:
+  - make -f Makefile.ci ocaml
+  - make -f Makefile.ci opam
+  - make -f Makefile.ci dependencies
+script:
+  - eval $(opam env)
+  - dune build @check
