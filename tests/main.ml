@@ -1,37 +1,6 @@
 open Core
-
-type ('a, 'b) vchannel = 'a Event.channel * 'b Event.channel
-
-let new_vchannel () = (Event.new_channel (), Event.new_channel ())
-
-let call (s, r) a =
-  Event.wrap (Event.send s a) (fun () -> Event.sync (Event.receive r))
-
-module VThread = struct
-  type t =
-    { thread: Thread.t
-    ; exn: exn option ref
-    ; bt: Stdlib.Printexc.raw_backtrace option ref }
-
-  let create f a =
-    let exn = ref None and bt = ref None in
-    let f a =
-      try f a
-      with e ->
-        exn := Some e ;
-        bt := Some (Stdlib.Printexc.get_raw_backtrace ())
-    in
-    {thread= Thread.create f a; exn; bt}
-
-  let join t =
-    Thread.join t.thread ;
-    match !(t.exn) with
-    | Some exn ->
-        Stdlib.Printexc.raise_with_backtrace exn
-          (Core.Option.value_exn !(t.bt))
-    | None ->
-        ()
-end
+module Lwt_utils = Dht.Lwt_utils
+open Lwt_utils.O
 
 module Address : Dht.Implementation.Address with type t = int = struct
   type t = int
@@ -77,23 +46,30 @@ module Transport = struct
 
   type t =
     { query_filter: stats -> message -> bool
-    ; query: (message, filter) vchannel
+    ; query: (message, filter) Lwt_utils.RPC.t
     ; stats: stats }
 
   let make_details query_filter =
-    {query_filter; query= new_vchannel (); stats= {filtered= 0}}
+    {query_filter; query= Lwt_utils.RPC.make (); stats= {filtered= 0}}
 
   let make () = make_details (fun _ _ -> false)
 
   let send t c m =
     if t.query_filter t.stats m then (
       t.stats.filtered <- t.stats.filtered + 1 ;
-      match Event.sync (call t.query m) with
-      | Passthrough ->
-          send () c m
-      | Response r ->
-          r )
+      Lwt_utils.RPC.send t.query m
+      >>= function Passthrough -> send () c m | Response r -> Lwt.return r )
     else send () c m
+
+  let connect _ = connect ()
+
+  let listen _ = listen ()
+
+  let endpoint _ = endpoint ()
+
+  let receive _ = receive ()
+
+  let respond _ = respond ()
 end
 
 module Dht = Dht.Chord.MakeDetails (Transport)
@@ -106,15 +82,19 @@ let () =
 open OUnit2
 
 let generic_join _ =
-  let addresses = [0; 100; 200; 50; 250; 150] in
-  let endpoints, dhts =
-    Core.List.fold_map addresses ~init:[] ~f:(fun endpoints address ->
-        let dht = Dht.make address endpoints in
-        (Dht.endpoint dht :: endpoints, dht))
+  let main =
+    let addresses = [0; 100; 200; 50; 250; 150] in
+    let+ endpoints, dhts =
+      Lwt_utils.List.fold_map addresses ~init:[] ~f:(fun endpoints address ->
+          let* dht = Dht.make address endpoints in
+          Lwt.return (Dht.endpoint dht :: endpoints, dht))
+    in
+    List.iter
+      ~f:(fun dht -> Logs.debug (fun m -> m "  dht: %a" Dht.pp_node dht.state))
+      dhts ;
+    ignore endpoints
   in
-  ignore endpoints ; ignore dhts
-
-module Thread = VThread
+  Lwt_main.run main
 
 (* Test race conditions when joining the network.
 
@@ -132,34 +112,50 @@ predecessor. Check 10 discovers 100 is not its successor anymore, 20
 is. *)
 
 let chord_join_race order ctxt =
-  let dht_pred = Dht.make 0 [] in
-  let dht_succ = Dht.make 100 [Dht.endpoint dht_pred] in
-  let eps = [Dht.endpoint dht_pred; Dht.endpoint dht_succ] in
-  let filter = function
-    | {Transport.filtered} -> (
-        function Transport.Hello _ -> filtered = 0 | _ -> false )
+  let main =
+    let* dht_pred = Dht.make 0 [] in
+    let* dht_succ = Dht.make 100 [Dht.endpoint dht_pred] in
+    let eps = [Dht.endpoint dht_pred; Dht.endpoint dht_succ] in
+    let filter = function
+      | {Transport.filtered} -> (
+          function Transport.Hello _ -> filtered = 0 | _ -> false )
+    in
+    let transport_a = Transport.make_details filter
+    and transport_b = Transport.make_details filter in
+    let make_dht (transport, addr, pred) =
+      let+ dht = Dht.make_details ~transport addr eps in
+      OUnit2.assert_equal ~ctxt ~printer:Address.to_string pred
+        (Dht.predecessor dht) ;
+      dht
+    in
+    let dht_a = make_dht (transport_a, 10, 0)
+    and dht_b = make_dht (transport_b, 20, if order then 10 else 0) in
+    let* qa = Lwt_utils.RPC.receive transport_a.query
+    and* qb = Lwt_utils.RPC.receive transport_b.query in
+    let check_query s p = function
+      | Transport.Hello {self= self, _; predecessor} ->
+          let printer = Address.to_string in
+          OUnit2.assert_equal ~ctxt ~printer s self ;
+          OUnit2.assert_equal ~ctxt ~printer p predecessor
+      | _ ->
+          OUnit2.assert_string "wrong query"
+    in
+    check_query 10 0 qa ;
+    check_query 20 0 qb ;
+    let transport_a, dht_a, exp_a, transport_b, dht_b, exp_b =
+      if order then (transport_a, dht_a, 0, transport_b, dht_b, 10)
+      else (transport_b, dht_b, 10, transport_a, dht_a, 0)
+    in
+    let* () = Lwt_utils.RPC.respond transport_a.query Transport.Passthrough in
+    let* dht_a = dht_a in
+    let* () = Lwt_utils.RPC.respond transport_b.query Transport.Passthrough in
+    let* dht_b = dht_b in
+    let printer = Address.to_string in
+    OUnit2.assert_equal ~ctxt ~printer exp_a (Dht.predecessor dht_a) ;
+    OUnit2.assert_equal ~ctxt ~printer exp_b (Dht.predecessor dht_b) ;
+    Lwt.return ()
   in
-  let transport_a = Transport.make_details filter
-  and transport_b = Transport.make_details filter in
-  let thread (transport, addr, pred) =
-    let dht = Dht.make_details ~transport addr eps in
-    OUnit2.assert_equal ~ctxt ~printer:Address.to_string pred
-      (Dht.predecessor dht)
-  in
-  let thread_a = Thread.create thread (transport_a, 10, 0)
-  and thread_b =
-    Thread.create thread (transport_b, 20, if order then 10 else 0)
-  in
-  let _ = Event.sync (Event.receive (fst transport_a.query))
-  and _ = Event.sync (Event.receive (fst transport_b.query)) in
-  let transport_a, thread_a, transport_b, thread_b =
-    if order then (transport_a, thread_a, transport_b, thread_b)
-    else (transport_b, thread_b, transport_a, thread_a)
-  in
-  Event.sync (Event.send (snd transport_a.query) Transport.Passthrough) ;
-  Thread.join thread_a ;
-  Event.sync (Event.send (snd transport_b.query) Transport.Passthrough) ;
-  Thread.join thread_b
+  Lwt_main.run main
 
 let suite =
   "DHT"

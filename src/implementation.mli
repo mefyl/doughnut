@@ -37,7 +37,7 @@ module type Implementation = sig
 
   type endpoint
 
-  val make : Address.t -> endpoint list -> node
+  val make : Address.t -> endpoint list -> node Lwt.t
 
   val endpoint : node -> endpoint
 end

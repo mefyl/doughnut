@@ -2,6 +2,7 @@
   (name dht)
   (modules
     chord
-    implementation)
+    implementation
+    lwt_utils)
   (modules_without_implementation implementation)
-  (libraries core logs threads.posix))
+  (libraries core logs lwt threads.posix))

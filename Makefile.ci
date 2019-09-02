@@ -31,4 +31,4 @@ $(OPAM_INIT): $(OPAM)
 	$(OPAM) init --disable-sandboxing --no-setup
 
 dependencies: $(OPAM_INIT)
-	$(OPAM) install --yes core dune logs ounit
+	$(OPAM) install --yes core dune logs lwt ounit
