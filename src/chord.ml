@@ -19,12 +19,17 @@ module type Transport = sig
   type message =
     | Successor of Address.t
     | Hello of {self: peer; predecessor: Address.t}
+    | Get of Address.t
+    | Set of Address.t * Bytes.t
 
   type response =
     | Found of peer * peer option
     | Forward of peer
     | Welcome
     | NotTheDroids
+    | Done
+    | Not_found
+    | Value of Bytes.t
 
   val connect : t -> endpoint -> client
 
@@ -179,6 +184,20 @@ module MakeDetails (T : Transport) = struct
                   m "%a: unrelated or wrong predecessor: %a" pp_node state
                     Address.pp addr) ;
               (T.NotTheDroids, state) )
+        | T.Get addr -> (
+          match Map.find state.values addr with
+          | Some value ->
+              Logs.debug (fun m ->
+                  m "%a: locally get %a" pp_node state Address.pp addr) ;
+              (T.Value value, state)
+          | None ->
+              (T.Not_found, state) )
+        | T.Set (key, data) ->
+            if own state key then (
+              Logs.debug (fun m ->
+                  m "%a: locally set %a" pp_node state Address.pp key) ;
+              (T.Done, {state with values= Map.set state.values ~key ~data}) )
+            else (T.Not_found, state)
       in
       let* query = T.receive transport server in
       let response, state = respond query in
@@ -220,6 +239,49 @@ module MakeDetails (T : Transport) = struct
   let make = make_details ~transport:(T.make ())
 
   let endpoint node = T.endpoint node.transport node.server
+
+  let get node addr =
+    successor node addr
+    >>= function
+    | None -> (
+      match Map.find node.state.values addr with
+      | Some value ->
+          Lwt.return (Result.Ok value)
+      | None ->
+          Lwt.return
+            (Result.Error
+               (Format.asprintf "key %a not found locally" Address.pp addr)) )
+    | Some ((peer_addr, ep), _) -> (
+        let client = T.connect node.transport ep in
+        T.send node.transport client (T.Get addr)
+        >>| function
+        | T.Value v ->
+            Result.Ok v
+        | T.Not_found ->
+            Result.Error
+              (Format.asprintf "key %a not found remotely on %a" Address.pp
+                 addr Address.pp peer_addr)
+        | _ ->
+            failwith "unexpected answer" )
+
+  let set node key data =
+    successor node key
+    >>= function
+    | None ->
+        ignore (Map.set node.state.values ~key ~data) ;
+        Lwt.return (Result.Ok ()) (* FIXME  *)
+    | Some ((peer_addr, ep), _) -> (
+        let client = T.connect node.transport ep in
+        T.send node.transport client (T.Set (key, data))
+        >>| function
+        | T.Done ->
+            Result.Ok ()
+        | T.Not_found ->
+            Result.Error
+              (Format.asprintf "key %a not set remotely on %a" Address.pp key
+                 Address.pp peer_addr)
+        | _ ->
+            failwith "unexpected answer" )
 end
 
 module Make (T : Transport) :
@@ -237,12 +299,17 @@ module DirectTransport (A : Implementation.Address) :
   type message =
     | Successor of Address.t
     | Hello of {self: peer; predecessor: Address.t}
+    | Get of Address.t
+    | Set of Address.t * Bytes.t
 
   and response =
     | Found of peer * peer option
     | Forward of peer
     | Welcome
     | NotTheDroids
+    | Done
+    | Not_found
+    | Value of Bytes.t
 
   and server = (message, response) Lwt_utils.RPC.t
 

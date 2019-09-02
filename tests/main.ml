@@ -84,7 +84,7 @@ open OUnit2
 let generic_join _ =
   let main =
     let addresses = [0; 100; 200; 50; 250; 150] in
-    let+ endpoints, dhts =
+    let* endpoints, dhts =
       Lwt_utils.List.fold_map addresses ~init:[] ~f:(fun endpoints address ->
           let* dht = Dht.make address endpoints in
           Lwt.return (Dht.endpoint dht :: endpoints, dht))
@@ -92,7 +92,17 @@ let generic_join _ =
     List.iter
       ~f:(fun dht -> Logs.debug (fun m -> m "  dht: %a" Dht.pp_node dht.state))
       dhts ;
-    ignore endpoints
+    ignore endpoints ;
+    let* res = Dht.set (List.hd_exn dhts) 50 (Bytes.of_string "50") in
+    Result.ok_or_failwith res ;
+    let* res = Dht.set (List.hd_exn dhts) 150 (Bytes.of_string "150") in
+    Result.ok_or_failwith res ;
+    let* res = Dht.get (List.hd_exn dhts) 150 in
+    OUnit.assert_equal ~printer:Bytes.to_string (Bytes.of_string "150")
+      (Result.ok_or_failwith res) ;
+    let+ res = Dht.get (List.hd_exn dhts) 50 in
+    OUnit.assert_equal ~printer:Bytes.to_string (Bytes.of_string "50")
+      (Result.ok_or_failwith res)
   in
   Lwt_main.run main
 

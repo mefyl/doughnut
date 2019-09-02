@@ -40,4 +40,8 @@ module type Implementation = sig
   val make : Address.t -> endpoint list -> node Lwt.t
 
   val endpoint : node -> endpoint
+
+  val set : node -> Address.t -> Bytes.t -> (unit, string) Result.t Lwt.t
+
+  val get : node -> Address.t -> (Bytes.t, string) Result.t Lwt.t
 end
