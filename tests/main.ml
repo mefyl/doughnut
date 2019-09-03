@@ -38,8 +38,8 @@ module Address : Dht.Implementation.Address with type t = int = struct
 end
 
 module Transport = struct
-  module Messages = Dht.Chord.Messages (Dht.Transport.DirectWire (Address))
-  include Dht.Transport.DirectTransport (Address) (Messages)
+  module Messages = Dht.Chord.Messages (Dht.Transport.Direct.Wire (Address))
+  include Dht.Transport.Direct.Transport (Address) (Messages)
 
   type filter = Passthrough | Response of Messages.response
 
@@ -74,7 +74,7 @@ module Transport = struct
 end
 
 module Dht =
-  Dht.Chord.MakeDetails (Dht.Transport.DirectWire (Address)) (Transport)
+  Dht.Chord.MakeDetails (Dht.Transport.Direct.Wire (Address)) (Transport)
 
 let () =
   Logs.set_level (Some Logs.Debug) ;

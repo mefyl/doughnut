@@ -16,6 +16,18 @@ module type Messages = sig
   type response
 end
 
+module Make (W : Wire) (M : Messages) = struct
+  module Wire = W
+
+  type client = (M.query, M.response) Wire.client
+
+  type server = (M.query, M.response) Wire.server
+
+  type endpoint = (M.query, M.response) Wire.endpoint
+
+  type peer = (M.query, M.response) Wire.peer
+end
+
 module type Transport = sig
   module Messages : Messages
 
@@ -50,48 +62,41 @@ module type Transport = sig
   val pp_peer : Format.formatter -> peer -> unit
 end
 
-module DirectWire (A : Implementation.Address) = struct
-  module Address = A
+module Direct = struct
+  module Wire (A : Implementation.Address) = struct
+    module Address = A
 
-  type ('a, 'b) server = ('a, 'b) Lwt_utils.RPC.t
+    type ('a, 'b) server = ('a, 'b) Lwt_utils.RPC.t
 
-  and ('a, 'b) client = ('a, 'b) server
+    and ('a, 'b) client = ('a, 'b) server
 
-  and ('a, 'b) endpoint = ('a, 'b) server
+    and ('a, 'b) endpoint = ('a, 'b) server
 
-  and ('a, 'b) peer = Address.t * ('a, 'b) endpoint
-end
+    and ('a, 'b) peer = Address.t * ('a, 'b) endpoint
+  end
 
-module DirectTransport (A : Implementation.Address) (Messages : Messages) =
-struct
-  type t = unit
+  module Transport (A : Implementation.Address) (Messages : Messages) = struct
+    include Make (Wire (A)) (Messages)
 
-  type id = unit
+    type t = unit
 
-  module Wire = DirectWire (A)
+    type id = unit
 
-  type client = (Messages.query, Messages.response) Wire.client
+    let make () = ()
 
-  type server = (Messages.query, Messages.response) Wire.server
+    let connect _ e = e
 
-  type endpoint = (Messages.query, Messages.response) Wire.endpoint
+    let listen _ () = Lwt_utils.RPC.make ()
 
-  type peer = (Messages.query, Messages.response) Wire.peer
+    let endpoint _ s = s
 
-  let make () = ()
+    let send _ = Lwt_utils.RPC.send
 
-  let connect _ e = e
+    let receive _ rpc =
+      Lwt.bind (Lwt_utils.RPC.receive rpc) (fun msg -> Lwt.return ((), msg))
 
-  let listen _ () = Lwt_utils.RPC.make ()
+    let respond _ rpc () resp = Lwt_utils.RPC.respond rpc resp
 
-  let endpoint _ s = s
-
-  let send _ = Lwt_utils.RPC.send
-
-  let receive _ rpc =
-    Lwt.bind (Lwt_utils.RPC.receive rpc) (fun msg -> Lwt.return ((), msg))
-
-  let respond _ rpc () resp = Lwt_utils.RPC.respond rpc resp
-
-  let pp_peer fmt (addr, _) = A.pp fmt addr
+    let pp_peer fmt (addr, _) = A.pp fmt addr
+  end
 end
