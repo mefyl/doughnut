@@ -38,16 +38,16 @@ module Address : Dht.Implementation.Address with type t = int = struct
 end
 
 module Transport = struct
-  module Types = Dht.Chord.Types (Address)
-  include Dht.Transport.DirectTransport (Address) (Types)
+  module Messages = Dht.Chord.Messages (Dht.Transport.DirectWire (Address))
+  include Dht.Transport.DirectTransport (Address) (Messages)
 
-  type filter = Passthrough | Response of Types.response
+  type filter = Passthrough | Response of Messages.response
 
   type stats = {mutable filtered: int}
 
   type t =
-    { query_filter: stats -> Types.message -> bool
-    ; query: (Types.message, filter) Lwt_utils.RPC.t
+    { query_filter: stats -> Messages.query -> bool
+    ; query: (Messages.query, filter) Lwt_utils.RPC.t
     ; stats: stats }
 
   let make_details query_filter =
@@ -73,7 +73,8 @@ module Transport = struct
   let respond _ = respond ()
 end
 
-module Dht = Dht.Chord.MakeDetails (Address) (Transport)
+module Dht =
+  Dht.Chord.MakeDetails (Dht.Transport.DirectWire (Address)) (Transport)
 
 let () =
   Logs.set_level (Some Logs.Debug) ;
@@ -111,7 +112,7 @@ let generic_join _ =
 
 * Create a network with nodes 0 and 100
 * Make 10 and 20 join concurrently:
-  * Let them both find their neighbors (0 and 100) and block hello messages.
+  * Let them both find their neighbors (0 and 100) and block hello queries.
   * Unlock one of them, which completes successfully.
   * Unlock the other which should fail
 
@@ -129,7 +130,7 @@ let chord_join_race order ctxt =
     let eps = [Dht.endpoint dht_pred; Dht.endpoint dht_succ] in
     let filter = function
       | {Transport.filtered} -> (
-          function Transport.Types.Hello _ -> filtered = 0 | _ -> false )
+          function Transport.Messages.Hello _ -> filtered = 0 | _ -> false )
     in
     let transport_a = Transport.make_details filter
     and transport_b = Transport.make_details filter in
@@ -144,7 +145,7 @@ let chord_join_race order ctxt =
     let* qa = Lwt_utils.RPC.receive transport_a.query
     and* qb = Lwt_utils.RPC.receive transport_b.query in
     let check_query s p = function
-      | Transport.Types.Hello {self= self, _; predecessor} ->
+      | Transport.Messages.Hello {self= self, _; predecessor} ->
           let printer = Address.to_string in
           OUnit2.assert_equal ~ctxt ~printer s self ;
           OUnit2.assert_equal ~ctxt ~printer p predecessor

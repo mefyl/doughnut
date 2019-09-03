@@ -1,50 +1,41 @@
 open Core
 open Lwt_utils.O
 
-module Types (A : Implementation.Address) = struct
-  module Address = A
-
-  type message =
-    | Successor of A.t
-    | Hello of {self: peer; predecessor: A.t}
-    | Get of A.t
-    | Set of A.t * Bytes.t
+module Messages (Wire : Transport.Wire) = struct
+  type query =
+    | Successor of Wire.Address.t
+    | Hello of {self: (query, response) Wire.peer; predecessor: Wire.Address.t}
+    | Get of Wire.Address.t
+    | Set of Wire.Address.t * Bytes.t
 
   and response =
-    | Found of peer * peer option
-    | Forward of peer
+    | Found of (query, response) Wire.peer * (query, response) Wire.peer option
+    | Forward of (query, response) Wire.peer
     | Welcome
     | NotTheDroids
     | Done
     | Not_found
     | Value of Bytes.t
-
-  and server = (message, response) Lwt_utils.RPC.t
-
-  and client = server
-
-  and endpoint = server
-
-  and peer = A.t * endpoint
 end
 
 module MakeDetails
-    (A : Implementation.Address)
-    (T : Transport.Transport with module Types = Types(A)) =
+    (W : Transport.Wire)
+    (T : Transport.Transport
+           with module Messages = Messages(W)
+            and module Wire = W) =
 struct
-  module Address = T.Types.Address
-  open T.Types
+  module Address = T.Wire.Address
   module Map = Map.Make (Address)
 
-  type endpoint = T.Types.endpoint
+  type endpoint = T.endpoint
 
   type state =
     { address: Address.t
-    ; predecessor: peer
-    ; finger: peer option Array.t
+    ; predecessor: T.peer
+    ; finger: T.peer option Array.t
     ; values: Bytes.t Map.t }
 
-  type node = {mutable state: state; server: server; transport: T.t}
+  type node = {mutable state: state; server: T.server; transport: T.t}
 
   let predecessor node = fst node.state.predecessor
 
@@ -89,11 +80,11 @@ struct
 
   let rec successor_query transport addr ep =
     let client = T.connect transport ep in
-    let* resp = T.send transport client (T.Types.Successor addr) in
+    let* resp = T.send transport client (T.Messages.Successor addr) in
     match resp with
-    | T.Types.Found (successor, predecessor) ->
+    | T.Messages.Found (successor, predecessor) ->
         Lwt.return (successor, predecessor)
-    | T.Types.Forward (_, ep) ->
+    | T.Messages.Forward (_, ep) ->
         (successor_query [@tailcall]) transport addr ep
     | _ ->
         Lwt.fail (Failure "unexpected answer")
@@ -140,18 +131,18 @@ struct
           state.predecessor) ;
     let rec thread (server, state) =
       let respond = function
-        | T.Types.Successor addr -> (
+        | T.Messages.Successor addr -> (
             Logs.debug (fun m ->
                 m "%a: query: successor %a" pp_node state Address.pp addr) ;
             match finger state addr with
             | None ->
-                ( T.Types.Found
+                ( T.Messages.Found
                     ( (state.address, T.endpoint transport server)
                     , Some state.predecessor )
                 , state )
             | Some peer ->
-                (T.Types.Forward peer, state) )
-        | T.Types.Hello {self= addr, ep; predecessor} ->
+                (T.Messages.Forward peer, state) )
+        | T.Messages.Hello {self= addr, ep; predecessor} ->
             Logs.debug (fun m ->
                 m "%a: query: hello %a (%a)" pp_node state Address.pp addr
                   Address.pp predecessor) ;
@@ -161,27 +152,27 @@ struct
             then (
               Logs.debug (fun m ->
                   m "%a: new predecessor: %a" pp_node state Address.pp addr) ;
-              (T.Types.Welcome, {state with predecessor= (addr, ep)}) )
+              (T.Messages.Welcome, {state with predecessor= (addr, ep)}) )
             else (
               Logs.debug (fun m ->
                   m "%a: unrelated or wrong predecessor: %a" pp_node state
                     Address.pp addr) ;
-              (T.Types.NotTheDroids, state) )
-        | T.Types.Get addr -> (
+              (T.Messages.NotTheDroids, state) )
+        | T.Messages.Get addr -> (
           match Map.find state.values addr with
           | Some value ->
               Logs.debug (fun m ->
                   m "%a: locally get %a" pp_node state Address.pp addr) ;
-              (T.Types.Value value, state)
+              (T.Messages.Value value, state)
           | None ->
-              (T.Types.Not_found, state) )
-        | T.Types.Set (key, data) ->
+              (T.Messages.Not_found, state) )
+        | T.Messages.Set (key, data) ->
             if own state key then (
               Logs.debug (fun m ->
                   m "%a: locally set %a" pp_node state Address.pp key) ;
-              ( T.Types.Done
+              ( T.Messages.Done
               , {state with values= Map.set state.values ~key ~data} ) )
-            else (T.Types.Not_found, state)
+            else (T.Messages.Not_found, state)
       in
       let* id, query = T.receive transport server in
       let response, state = respond query in
@@ -192,13 +183,13 @@ struct
     let hello peer =
       T.send transport
         (T.connect transport (snd peer))
-        (T.Types.Hello
+        (T.Messages.Hello
            { self= (state.address, T.endpoint transport server)
            ; predecessor= fst state.predecessor })
       >>= function
-      | T.Types.Welcome ->
+      | T.Messages.Welcome ->
           Lwt.return true
-      | T.Types.NotTheDroids ->
+      | T.Messages.NotTheDroids ->
           Lwt.return false
       | _ ->
           Lwt.fail (Failure "unexpected answer")
@@ -237,11 +228,11 @@ struct
                (Format.asprintf "key %a not found locally" Address.pp addr)) )
     | Some ((peer_addr, ep), _) -> (
         let client = T.connect node.transport ep in
-        T.send node.transport client (T.Types.Get addr)
+        T.send node.transport client (T.Messages.Get addr)
         >>| function
-        | T.Types.Value v ->
+        | T.Messages.Value v ->
             Result.Ok v
-        | T.Types.Not_found ->
+        | T.Messages.Not_found ->
             Result.Error
               (Format.asprintf "key %a not found remotely on %a" Address.pp
                  addr Address.pp peer_addr)
@@ -256,11 +247,11 @@ struct
         Lwt.return (Result.Ok ()) (* FIXME  *)
     | Some ((peer_addr, ep), _) -> (
         let client = T.connect node.transport ep in
-        T.send node.transport client (T.Types.Set (key, data))
+        T.send node.transport client (T.Messages.Set (key, data))
         >>| function
-        | T.Types.Done ->
+        | T.Messages.Done ->
             Result.Ok ()
-        | T.Types.Not_found ->
+        | T.Messages.Not_found ->
             Result.Error
               (Format.asprintf "key %a not set remotely on %a" Address.pp key
                  Address.pp peer_addr)
@@ -269,7 +260,9 @@ struct
 end
 
 module Make
-    (A : Implementation.Address)
-    (T : Transport.Transport with module Types = Types(A)) :
-  Implementation.Implementation with type Address.t = A.t =
-  MakeDetails (A) (T)
+    (W : Transport.Wire)
+    (T : Transport.Transport
+           with module Messages = Messages(W)
+            and module Wire = W) :
+  Implementation.Implementation with type Address.t = W.Address.t =
+  MakeDetails (W) (T)
