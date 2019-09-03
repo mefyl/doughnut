@@ -38,7 +38,8 @@ module Address : Dht.Implementation.Address with type t = int = struct
 end
 
 module Transport = struct
-  include Dht.Chord.DirectTransport (Address) (Dht.Chord.Types (Address))
+  module Types = Dht.Chord.Types (Address)
+  include Dht.Transport.DirectTransport (Address) (Types)
 
   type filter = Passthrough | Response of Types.response
 

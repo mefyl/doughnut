@@ -1,8 +1,7 @@
 open Core
 open Lwt_utils.O
 
-module Types (A : Implementation.Address) = (* : Transport.Types *)
-struct
+module Types (A : Implementation.Address) = struct
   module Address = A
 
   type message =
@@ -27,38 +26,6 @@ struct
   and endpoint = server
 
   and peer = A.t * endpoint
-end
-
-module DirectTransport
-    (A : Implementation.Address)
-    (Types : module type of Types (A)) :
-  Transport.Transport
-    with module Types = Types
-     and type t = unit
-     and type id = unit =
-struct
-  module Types = Types
-  include Types
-
-  type t = unit
-
-  type id = unit
-
-  let make () = ()
-
-  let connect _ e = e
-
-  let listen _ () = Lwt_utils.RPC.make ()
-
-  let endpoint _ s = s
-
-  let send _ = Lwt_utils.RPC.send
-
-  let receive _ rpc = Lwt_utils.RPC.receive rpc >>| fun msg -> ((), msg)
-
-  let respond _ rpc () resp = Lwt_utils.RPC.respond rpc resp
-
-  let pp_peer fmt (addr, _) = Address.pp fmt addr
 end
 
 module MakeDetails
