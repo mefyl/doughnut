@@ -31,6 +31,8 @@ module type Transport = sig
     | Not_found
     | Value of Bytes.t
 
+  type id
+
   val connect : t -> endpoint -> client
 
   val listen : t -> unit -> server
@@ -39,9 +41,9 @@ module type Transport = sig
 
   val send : t -> client -> message -> response Lwt.t
 
-  val receive : t -> server -> message Lwt.t
+  val receive : t -> server -> (id * message) Lwt.t
 
-  val respond : t -> server -> response -> unit Lwt.t
+  val respond : t -> server -> id -> response -> unit Lwt.t
 
   val pp_peer : Format.formatter -> peer -> unit
 end
@@ -199,10 +201,10 @@ module MakeDetails (T : Transport) = struct
               (T.Done, {state with values= Map.set state.values ~key ~data}) )
             else (T.Not_found, state)
       in
-      let* query = T.receive transport server in
+      let* id, query = T.receive transport server in
       let response, state = respond query in
       res.state <- state ;
-      let* () = T.respond transport server response in
+      let* () = T.respond transport server id response in
       (thread [@tailcall]) (server, state)
     in
     let hello peer =
@@ -289,10 +291,13 @@ module Make (T : Transport) :
   MakeDetails (T)
 
 module DirectTransport (A : Implementation.Address) :
-  Transport with module Address = A and type t = unit = struct
+  Transport with module Address = A and type t = unit and type id = unit =
+struct
   module Address = A
 
   type t = unit
+
+  type id = unit
 
   let make () = ()
 
@@ -327,9 +332,9 @@ module DirectTransport (A : Implementation.Address) :
 
   let send _ = Lwt_utils.RPC.send
 
-  let receive _ = Lwt_utils.RPC.receive
+  let receive _ rpc = Lwt_utils.RPC.receive rpc >>| fun msg -> ((), msg)
 
-  let respond _ = Lwt_utils.RPC.respond
+  let respond _ rpc () resp = Lwt_utils.RPC.respond rpc resp
 
   let pp_peer fmt (addr, _) = Address.pp fmt addr
 end
