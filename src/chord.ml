@@ -1,28 +1,17 @@
 open Core
 open Lwt_utils.O
 
-module type Transport = sig
-  module Address : Implementation.Address
-
-  type t
-
-  val make : unit -> t
-
-  type client
-
-  type server
-
-  type endpoint
-
-  type peer = Address.t * endpoint
+module Types (A : Implementation.Address) = (* : Transport.Types *)
+struct
+  module Address = A
 
   type message =
-    | Successor of Address.t
-    | Hello of {self: peer; predecessor: Address.t}
-    | Get of Address.t
-    | Set of Address.t * Bytes.t
+    | Successor of A.t
+    | Hello of {self: peer; predecessor: A.t}
+    | Get of A.t
+    | Set of A.t * Bytes.t
 
-  type response =
+  and response =
     | Found of peer * peer option
     | Forward of peer
     | Welcome
@@ -31,31 +20,56 @@ module type Transport = sig
     | Not_found
     | Value of Bytes.t
 
-  type id
+  and server = (message, response) Lwt_utils.RPC.t
 
-  val connect : t -> endpoint -> client
+  and client = server
 
-  val listen : t -> unit -> server
+  and endpoint = server
 
-  val endpoint : t -> server -> endpoint
-
-  val send : t -> client -> message -> response Lwt.t
-
-  val receive : t -> server -> (id * message) Lwt.t
-
-  val respond : t -> server -> id -> response -> unit Lwt.t
-
-  val pp_peer : Format.formatter -> peer -> unit
+  and peer = A.t * endpoint
 end
 
-module MakeDetails (T : Transport) = struct
-  module Address = T.Address
+module DirectTransport
+    (A : Implementation.Address)
+    (Types : module type of Types (A)) :
+  Transport.Transport
+    with module Types = Types
+     and type t = unit
+     and type id = unit =
+struct
+  module Types = Types
+  include Types
 
-  type endpoint = T.endpoint
+  type t = unit
 
-  type peer = T.peer
+  type id = unit
 
+  let make () = ()
+
+  let connect _ e = e
+
+  let listen _ () = Lwt_utils.RPC.make ()
+
+  let endpoint _ s = s
+
+  let send _ = Lwt_utils.RPC.send
+
+  let receive _ rpc = Lwt_utils.RPC.receive rpc >>| fun msg -> ((), msg)
+
+  let respond _ rpc () resp = Lwt_utils.RPC.respond rpc resp
+
+  let pp_peer fmt (addr, _) = Address.pp fmt addr
+end
+
+module MakeDetails
+    (A : Implementation.Address)
+    (T : Transport.Transport with module Types = Types(A)) =
+struct
+  module Address = T.Types.Address
+  open T.Types
   module Map = Map.Make (Address)
+
+  type endpoint = T.Types.endpoint
 
   type state =
     { address: Address.t
@@ -63,7 +77,7 @@ module MakeDetails (T : Transport) = struct
     ; finger: peer option Array.t
     ; values: Bytes.t Map.t }
 
-  type node = {mutable state: state; server: T.server; transport: T.t}
+  type node = {mutable state: state; server: server; transport: T.t}
 
   let predecessor node = fst node.state.predecessor
 
@@ -108,11 +122,11 @@ module MakeDetails (T : Transport) = struct
 
   let rec successor_query transport addr ep =
     let client = T.connect transport ep in
-    let* resp = T.send transport client (Successor addr) in
+    let* resp = T.send transport client (T.Types.Successor addr) in
     match resp with
-    | T.Found (successor, predecessor) ->
+    | T.Types.Found (successor, predecessor) ->
         Lwt.return (successor, predecessor)
-    | T.Forward (_, ep) ->
+    | T.Types.Forward (_, ep) ->
         (successor_query [@tailcall]) transport addr ep
     | _ ->
         Lwt.fail (Failure "unexpected answer")
@@ -159,18 +173,18 @@ module MakeDetails (T : Transport) = struct
           state.predecessor) ;
     let rec thread (server, state) =
       let respond = function
-        | T.Successor addr -> (
+        | T.Types.Successor addr -> (
             Logs.debug (fun m ->
                 m "%a: query: successor %a" pp_node state Address.pp addr) ;
             match finger state addr with
             | None ->
-                ( T.Found
+                ( T.Types.Found
                     ( (state.address, T.endpoint transport server)
                     , Some state.predecessor )
                 , state )
             | Some peer ->
-                (T.Forward peer, state) )
-        | T.Hello {self= addr, ep; predecessor} ->
+                (T.Types.Forward peer, state) )
+        | T.Types.Hello {self= addr, ep; predecessor} ->
             Logs.debug (fun m ->
                 m "%a: query: hello %a (%a)" pp_node state Address.pp addr
                   Address.pp predecessor) ;
@@ -180,26 +194,27 @@ module MakeDetails (T : Transport) = struct
             then (
               Logs.debug (fun m ->
                   m "%a: new predecessor: %a" pp_node state Address.pp addr) ;
-              (T.Welcome, {state with predecessor= (addr, ep)}) )
+              (T.Types.Welcome, {state with predecessor= (addr, ep)}) )
             else (
               Logs.debug (fun m ->
                   m "%a: unrelated or wrong predecessor: %a" pp_node state
                     Address.pp addr) ;
-              (T.NotTheDroids, state) )
-        | T.Get addr -> (
+              (T.Types.NotTheDroids, state) )
+        | T.Types.Get addr -> (
           match Map.find state.values addr with
           | Some value ->
               Logs.debug (fun m ->
                   m "%a: locally get %a" pp_node state Address.pp addr) ;
-              (T.Value value, state)
+              (T.Types.Value value, state)
           | None ->
-              (T.Not_found, state) )
-        | T.Set (key, data) ->
+              (T.Types.Not_found, state) )
+        | T.Types.Set (key, data) ->
             if own state key then (
               Logs.debug (fun m ->
                   m "%a: locally set %a" pp_node state Address.pp key) ;
-              (T.Done, {state with values= Map.set state.values ~key ~data}) )
-            else (T.Not_found, state)
+              ( T.Types.Done
+              , {state with values= Map.set state.values ~key ~data} ) )
+            else (T.Types.Not_found, state)
       in
       let* id, query = T.receive transport server in
       let response, state = respond query in
@@ -210,13 +225,13 @@ module MakeDetails (T : Transport) = struct
     let hello peer =
       T.send transport
         (T.connect transport (snd peer))
-        (T.Hello
+        (T.Types.Hello
            { self= (state.address, T.endpoint transport server)
            ; predecessor= fst state.predecessor })
       >>= function
-      | T.Welcome ->
+      | T.Types.Welcome ->
           Lwt.return true
-      | T.NotTheDroids ->
+      | T.Types.NotTheDroids ->
           Lwt.return false
       | _ ->
           Lwt.fail (Failure "unexpected answer")
@@ -255,11 +270,11 @@ module MakeDetails (T : Transport) = struct
                (Format.asprintf "key %a not found locally" Address.pp addr)) )
     | Some ((peer_addr, ep), _) -> (
         let client = T.connect node.transport ep in
-        T.send node.transport client (T.Get addr)
+        T.send node.transport client (T.Types.Get addr)
         >>| function
-        | T.Value v ->
+        | T.Types.Value v ->
             Result.Ok v
-        | T.Not_found ->
+        | T.Types.Not_found ->
             Result.Error
               (Format.asprintf "key %a not found remotely on %a" Address.pp
                  addr Address.pp peer_addr)
@@ -274,11 +289,11 @@ module MakeDetails (T : Transport) = struct
         Lwt.return (Result.Ok ()) (* FIXME  *)
     | Some ((peer_addr, ep), _) -> (
         let client = T.connect node.transport ep in
-        T.send node.transport client (T.Set (key, data))
+        T.send node.transport client (T.Types.Set (key, data))
         >>| function
-        | T.Done ->
+        | T.Types.Done ->
             Result.Ok ()
-        | T.Not_found ->
+        | T.Types.Not_found ->
             Result.Error
               (Format.asprintf "key %a not set remotely on %a" Address.pp key
                  Address.pp peer_addr)
@@ -286,55 +301,8 @@ module MakeDetails (T : Transport) = struct
             failwith "unexpected answer" )
 end
 
-module Make (T : Transport) :
-  Implementation.Implementation with type Address.t = T.Address.t =
-  MakeDetails (T)
-
-module DirectTransport (A : Implementation.Address) :
-  Transport with module Address = A and type t = unit and type id = unit =
-struct
-  module Address = A
-
-  type t = unit
-
-  type id = unit
-
-  let make () = ()
-
-  type message =
-    | Successor of Address.t
-    | Hello of {self: peer; predecessor: Address.t}
-    | Get of Address.t
-    | Set of Address.t * Bytes.t
-
-  and response =
-    | Found of peer * peer option
-    | Forward of peer
-    | Welcome
-    | NotTheDroids
-    | Done
-    | Not_found
-    | Value of Bytes.t
-
-  and server = (message, response) Lwt_utils.RPC.t
-
-  and client = server
-
-  and endpoint = server
-
-  and peer = Address.t * endpoint
-
-  let connect _ e = e
-
-  let listen _ () = Lwt_utils.RPC.make ()
-
-  let endpoint _ s = s
-
-  let send _ = Lwt_utils.RPC.send
-
-  let receive _ rpc = Lwt_utils.RPC.receive rpc >>| fun msg -> ((), msg)
-
-  let respond _ rpc () resp = Lwt_utils.RPC.respond rpc resp
-
-  let pp_peer fmt (addr, _) = Address.pp fmt addr
-end
+module Make
+    (A : Implementation.Address)
+    (T : Transport.Transport with module Types = Types(A)) :
+  Implementation.Implementation with type Address.t = A.t =
+  MakeDetails (A) (T)

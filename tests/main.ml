@@ -38,15 +38,15 @@ module Address : Dht.Implementation.Address with type t = int = struct
 end
 
 module Transport = struct
-  include Dht.Chord.DirectTransport (Address)
+  include Dht.Chord.DirectTransport (Address) (Dht.Chord.Types (Address))
 
-  type filter = Passthrough | Response of response
+  type filter = Passthrough | Response of Types.response
 
   type stats = {mutable filtered: int}
 
   type t =
-    { query_filter: stats -> message -> bool
-    ; query: (message, filter) Lwt_utils.RPC.t
+    { query_filter: stats -> Types.message -> bool
+    ; query: (Types.message, filter) Lwt_utils.RPC.t
     ; stats: stats }
 
   let make_details query_filter =
@@ -72,7 +72,7 @@ module Transport = struct
   let respond _ = respond ()
 end
 
-module Dht = Dht.Chord.MakeDetails (Transport)
+module Dht = Dht.Chord.MakeDetails (Address) (Transport)
 
 let () =
   Logs.set_level (Some Logs.Debug) ;
@@ -128,7 +128,7 @@ let chord_join_race order ctxt =
     let eps = [Dht.endpoint dht_pred; Dht.endpoint dht_succ] in
     let filter = function
       | {Transport.filtered} -> (
-          function Transport.Hello _ -> filtered = 0 | _ -> false )
+          function Transport.Types.Hello _ -> filtered = 0 | _ -> false )
     in
     let transport_a = Transport.make_details filter
     and transport_b = Transport.make_details filter in
@@ -143,7 +143,7 @@ let chord_join_race order ctxt =
     let* qa = Lwt_utils.RPC.receive transport_a.query
     and* qb = Lwt_utils.RPC.receive transport_b.query in
     let check_query s p = function
-      | Transport.Hello {self= self, _; predecessor} ->
+      | Transport.Types.Hello {self= self, _; predecessor} ->
           let printer = Address.to_string in
           OUnit2.assert_equal ~ctxt ~printer s self ;
           OUnit2.assert_equal ~ctxt ~printer p predecessor

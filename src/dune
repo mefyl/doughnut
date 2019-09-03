@@ -3,6 +3,7 @@
   (modules
     chord
     implementation
-    lwt_utils)
+    lwt_utils
+    transport)
   (modules_without_implementation implementation)
   (libraries core logs lwt threads.posix))
