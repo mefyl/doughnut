@@ -91,6 +91,13 @@ let () =
 
 open OUnit2
 
+let generic_single _ =
+  let main =
+    let+ dht = Dht.make 0 [] in
+    ignore dht
+  in
+  Lwt_main.run main
+
 let generic_join _ =
   let main =
     let addresses = [0; 100; 200; 50; 250; 150] in
@@ -216,7 +223,7 @@ let chord_complexity ctxt =
 
 let suite =
   "DHT"
-  >::: [ "generic" >::: ["join" >:: generic_join]
+  >::: [ "generic" >::: ["join" >:: generic_join; "single" >:: generic_single]
        ; "chord"
          >::: [ "join"
                 >::: [ "wrong_predecessor" >:: chord_join_race true
