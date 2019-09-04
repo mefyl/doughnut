@@ -52,7 +52,6 @@ struct
   let own node addr = between addr (fst node.predecessor) node.address
 
   let finger state addr =
-    let open Address.O in
     if between addr (fst state.predecessor) state.address then (
       Logs.debug (fun m ->
           m "%a: address in our space, response is self" pp_node state) ;
@@ -63,6 +62,7 @@ struct
             false
         | Some _ ->
             let offset = Address.log (Address.space_log - 1 - i) in
+            let open Address.O in
             addr < state.address + offset
       in
       match Core.Array.findi ~f state.finger with

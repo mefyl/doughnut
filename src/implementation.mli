@@ -11,6 +11,8 @@ module type Address = sig
 
   val random : unit -> t
 
+  val space : int
+
   val space_log : int
 
   val null : t
@@ -22,11 +24,15 @@ module type Address = sig
   val to_string : t -> string
 
   module O : sig
+    val ( = ) : t -> t -> bool
+
     val ( < ) : t -> t -> bool
 
     val ( <= ) : t -> t -> bool
 
     val ( + ) : t -> t -> t
+
+    val ( - ) : t -> t -> t
   end
 end
 

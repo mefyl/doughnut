@@ -17,6 +17,8 @@ module Address : Dht.Implementation.Address with type t = int = struct
 
   let random () = Random.int 255
 
+  let space = 256
+
   let space_log = 8
 
   let null = 0
@@ -29,11 +31,17 @@ module Address : Dht.Implementation.Address with type t = int = struct
   let to_string = string_of_int
 
   module O = struct
+    let ( = ) = Stdlib.( = )
+
     let ( < ) = Stdlib.( < )
 
     let ( <= ) = Stdlib.( <= )
 
     let ( + ) l r = (l + r) mod 256
+
+    let ( - ) l r =
+      let res = (l - r) mod 256 in
+      if res < 0 then res + 256 else res
   end
 end
 
