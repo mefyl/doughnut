@@ -10,7 +10,9 @@ module Messages (Wire : Transport.Wire) = struct
 
   and response =
     | Found of (query, response) Wire.peer * (query, response) Wire.peer option
-    | Forward of (query, response) Wire.peer
+    | Forward of
+        { forward: (query, response) Wire.peer
+        ; predecessor: (query, response) Wire.peer }
     | Welcome
     | NotTheDroids
     | Done
@@ -29,10 +31,12 @@ struct
 
   type endpoint = T.endpoint
 
+  type finger = T.peer option Array.t
+
   type state =
     { address: Address.t
     ; predecessor: T.peer
-    ; finger: T.peer option Array.t
+    ; finger: finger
     ; values: Bytes.t Map.t }
 
   type node = {mutable state: state; server: T.server; transport: T.t}
@@ -54,48 +58,137 @@ struct
   let finger state addr =
     if between addr (fst state.predecessor) state.address then (
       Logs.debug (fun m ->
-          m "%a: address in our space, response is self" pp_node state) ;
+          m "%a: address %a in our space, response is self" pp_node state
+            Address.pp addr) ;
       None )
     else
       let f i = function
         | None ->
             false
-        | Some _ ->
-            let offset = Address.log (Address.space_log - 1 - i) in
+        | Some (a, _) ->
+            i = Stdlib.Array.length state.finger - 1
+            ||
             let open Address.O in
-            addr < state.address + offset
+            a - state.address < addr - state.address
       in
       match Core.Array.findi ~f state.finger with
       | Some (_, lookup) ->
           let res = Core.Option.value_exn lookup in
           Logs.debug (fun m ->
-              m "%a: response from finger: %a" pp_node state T.pp_peer res) ;
-          Some res
-      | None ->
-          let res = state.predecessor in
-          Logs.debug (fun m ->
-              m "%a: finger empty, return predecessor: %a" pp_node state
+              m "%a: finger response for %a: %a" pp_node state Address.pp addr
                 T.pp_peer res) ;
           Some res
+      | None ->
+          Logs.err (fun m -> m "ouhlala") ;
+          failwith "ouhlala"
 
-  let rec successor_query transport addr ep =
-    let client = T.connect transport ep in
-    let* resp = T.send transport client (T.Messages.Successor addr) in
-    match resp with
-    | T.Messages.Found (successor, predecessor) ->
-        Lwt.return (successor, predecessor)
-    | T.Messages.Forward (_, ep) ->
-        (successor_query [@tailcall]) transport addr ep
-    | _ ->
-        Lwt.fail (Failure "unexpected answer")
+  let successor_query transport state addr ep =
+    Logs.debug (fun m -> m "%a: lookup (%a)" pp_node state Address.pp addr) ;
+    let query ep =
+      let client = T.connect transport ep in
+      T.send transport client (T.Messages.Successor addr)
+    in
+    let rec finalize (peer, ep) =
+      query ep
+      >>= function
+      | T.Messages.Found (successor, predecessor) ->
+          Lwt.return (successor, predecessor)
+      | T.Messages.Forward {predecessor; _} ->
+          Logs.debug (fun m ->
+              m "%a: refusing to forward lookup (%a) past %a, backtrack to %a"
+                pp_node state Address.pp addr T.pp_peer (peer, ep) T.pp_peer
+                predecessor) ;
+          (finalize [@tailcall]) predecessor
+      | _ ->
+          Lwt.fail (Failure "unexpected answer")
+    in
+    let rec iter (peer, ep) =
+      query ep
+      >>= function
+      | T.Messages.Found (successor, predecessor) ->
+          Lwt.return (successor, predecessor)
+      | T.Messages.Forward {forward= peer_addr, ep; _}
+        when Option.value_map peer ~default:false ~f:(fun peer ->
+                 between addr peer peer_addr) ->
+          Logs.debug (fun m ->
+              m "%a: forward final lookup (%a) to %a" pp_node state Address.pp
+                addr T.pp_peer (peer_addr, ep)) ;
+          (finalize [@tailcall]) (peer_addr, ep)
+      | T.Messages.Forward {forward= (peer_addr, ep) as peer; _} ->
+          Logs.debug (fun m ->
+              m "%a: forward lookup (%a) to %a" pp_node state Address.pp addr
+                T.pp_peer peer) ;
+          (iter [@tailcall]) (Some peer_addr, ep)
+      | _ ->
+          Lwt.fail (Failure "unexpected answer")
+    in
+    iter (None, ep)
 
-  let successor node addr =
-    match finger node.state addr with
+  let successor transport state addr =
+    match finger state addr with
     | None ->
         Lwt.return None
     | Some (_, ep) ->
-        let+ succ = successor_query node.transport addr ep in
+        let+ succ = successor_query transport state addr ep in
         Some succ
+
+  let finger_add state finger (addr, ep) =
+    let finger = Stdlib.Array.copy finger in
+    let rec fill n =
+      let index = Address.space_log - n - 1
+      and pivot =
+        let open Address.O in
+        state.address + Address.log n
+      in
+      let current = Stdlib.Array.get finger index in
+      if
+        Option.value ~default:true
+          (Option.map current ~f:(fun (c, _) -> between addr state.address c))
+      then
+        if between pivot state.address addr then (
+          Logs.debug (fun m ->
+              m "%a: update finger entry %i (%a) to %a" pp_node state n
+                Address.pp pivot T.pp_peer (addr, ep)) ;
+          Stdlib.Array.set finger index (Some (addr, ep)) ) ;
+      if n < Address.space_log - 1 then (fill [@tailcall]) (n + 1)
+    in
+    fill 0 ; finger
+
+  let finger_check transport state =
+    Logs.debug (fun m -> m "%a: refresh finger table" pp_node state) ;
+    let rec check state n =
+      assert (n >= 0 && n < Address.space_log) ;
+      let index = Address.space_log - n - 1 in
+      let pivot =
+        let open Address.O in
+        state.address + Address.log n
+      in
+      let* state =
+        successor transport state pivot
+        >>| function
+        | None ->
+            Logs.debug (fun m ->
+                m "%a: finger entry %i left empty" pp_node state n) ;
+            state
+        | Some (((a, _) as succ), _) -> (
+          match Stdlib.Array.get state.finger index with
+          | Some (v, _) when Address.compare v a = 0 ->
+              Logs.debug (fun m ->
+                  m "%a: leave finger entry %i to %a" pp_node state n T.pp_peer
+                    succ) ;
+              state
+          | _ ->
+              Logs.debug (fun m ->
+                  m "%a: update finger entry %i (%a) to %a" pp_node state n
+                    Address.pp pivot T.pp_peer succ) ;
+              let finger = Stdlib.Array.copy state.finger in
+              Stdlib.Array.set finger index (Some succ) ;
+              {state with finger} )
+      in
+      if n = Address.space_log - 1 then Lwt.return state
+      else (check [@tailcall]) state (n + 1)
+    in
+    check state 0
 
   let rec make_details ?(transport = T.make ()) address endpoints : node Lwt.t
       =
@@ -104,7 +197,14 @@ struct
     let* successor, predecessor =
       match
         Core.List.find_map
-          ~f:(fun ep -> Option.some (successor_query transport address ep))
+          ~f:(fun ep ->
+            Option.some
+              (successor_query transport
+                 { address
+                 ; predecessor= (Address.null, ep)
+                 ; finger= Stdlib.Array.make 0 None
+                 ; values= Map.empty }
+                 address ep))
           endpoints
       with
       | None ->
@@ -119,11 +219,20 @@ struct
           (Some successor, predecessor)
     in
     let state =
+      let size = Address.space_log in
+      let finger = Stdlib.Array.make size None in
+      Stdlib.Array.set finger (size - 1) successor ;
       let self = (address, T.endpoint transport server) in
-      { address
-      ; predecessor= Core.Option.value predecessor ~default:self
-      ; finger= Stdlib.Array.make Address.space_log None
-      ; values= Map.empty }
+      let predecessor = Core.Option.value predecessor ~default:self in
+      let finger = Stdlib.Array.make Address.space_log None in
+      {address; predecessor; finger; values= Map.empty}
+    in
+    let state =
+      let finger =
+        Option.value ~default:state.finger
+          (Option.map successor ~f:(fun n -> finger_add state state.finger n))
+      in
+      {state with finger}
     in
     let res = {server; state; transport} in
     Logs.debug (fun m ->
@@ -141,7 +250,9 @@ struct
                     , Some state.predecessor )
                 , state )
             | Some peer ->
-                (T.Messages.Forward peer, state) )
+                ( T.Messages.Forward
+                    {forward= peer; predecessor= state.predecessor}
+                , state ) )
         | T.Messages.Hello {self= addr, ep; predecessor} ->
             Logs.debug (fun m ->
                 m "%a: query: hello %a (%a)" pp_node state Address.pp addr
@@ -152,7 +263,10 @@ struct
             then (
               Logs.debug (fun m ->
                   m "%a: new predecessor: %a" pp_node state Address.pp addr) ;
-              (T.Messages.Welcome, {state with predecessor= (addr, ep)}) )
+              ( T.Messages.Welcome
+              , { state with
+                  predecessor= (addr, ep)
+                ; finger= finger_add state state.finger (addr, ep) } ) )
             else (
               Logs.debug (fun m ->
                   m "%a: unrelated or wrong predecessor: %a" pp_node state
@@ -203,6 +317,9 @@ struct
     in
     if joined then (
       Logs.debug (fun m -> m "%a: joined successfully" pp_node state) ;
+      (* let* state = finger_check transport state in *)
+      (* Logs.debug (fun m -> m "%a: finger initialized" pp_node state) ; *)
+      (* let res = {res with state} in *)
       ignore (thread (server, state)) ;
       Lwt.return res )
     else (
@@ -216,7 +333,7 @@ struct
   let endpoint node = T.endpoint node.transport node.server
 
   let get node addr =
-    successor node addr
+    successor node.transport node.state addr
     >>= function
     | None -> (
       match Map.find node.state.values addr with
@@ -240,7 +357,7 @@ struct
             failwith "unexpected answer" )
 
   let set node key data =
-    successor node key
+    successor node.transport node.state key
     >>= function
     | None ->
         ignore (Map.set node.state.values ~key ~data) ;

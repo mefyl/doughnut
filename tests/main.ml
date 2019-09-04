@@ -216,7 +216,7 @@ let chord_complexity ctxt =
     in
     ignore endpoints ;
     ignore dhts ;
-    assert_greater ~ctxt ~printer:string_of_int 400 !count ;
+    assert_greater ~ctxt ~printer:string_of_int 50 !count ;
     Lwt.return ()
   in
   Lwt_main.run main
