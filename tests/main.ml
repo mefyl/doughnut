@@ -177,12 +177,50 @@ let chord_join_race order ctxt =
   in
   Lwt_main.run main
 
+let assert_greater ?ctxt ?(cmp = fun a b -> a > b) ?printer ?pp_diff ?msg a b =
+  let printer =
+    let f printer v = if v = a then "at most " ^ printer v else printer v in
+    Option.map printer ~f
+  in
+  OUnit2.assert_equal ?ctxt ~cmp ?printer ?pp_diff ?msg a b
+
+let chord_complexity ctxt =
+  let main =
+    let rec enumerate acc = function
+      | 0 ->
+          0 :: acc
+      | n ->
+          enumerate (n :: acc) (n - 1)
+    in
+    let addresses = enumerate [] ((Address.space - 1) / 10) in
+    let count = ref 0 in
+    let* endpoints, dhts =
+      Lwt_utils.List.fold_map addresses ~init:[] ~f:(fun endpoints address ->
+          let filter _ = function
+            | Transport.Messages.Successor _ ->
+                count := !count + 1 ;
+                false
+            | _ ->
+                false
+          in
+          let transport = Transport.make_details filter in
+          let* dht = Dht.make_details ~transport address endpoints in
+          Lwt.return (Dht.endpoint dht :: endpoints, dht))
+    in
+    ignore endpoints ;
+    ignore dhts ;
+    assert_greater ~ctxt ~printer:string_of_int 400 !count ;
+    Lwt.return ()
+  in
+  Lwt_main.run main
+
 let suite =
   "DHT"
   >::: [ "generic" >::: ["join" >:: generic_join]
        ; "chord"
          >::: [ "join"
                 >::: [ "wrong_predecessor" >:: chord_join_race true
-                     ; "wrong_successor" >:: chord_join_race false ] ] ]
+                     ; "wrong_successor" >:: chord_join_race false ]
+              ; "lookup" >::: ["complexity" >:: chord_complexity] ] ]
 
 let () = run_test_tt_main suite
