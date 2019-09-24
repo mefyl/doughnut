@@ -7,9 +7,9 @@ module Address : Dht.Implementation.Address with type t = int = struct
 
   let compare = Stdlib.compare
 
-  let sexp_of_t i = Sexp.Atom (string_of_int i)
+  let sexp_of i = Sexp.Atom (string_of_int i)
 
-  let t_of_sexp = function
+  let of_sexp = function
     | Sexp.Atom s ->
         int_of_string s
     | _ ->

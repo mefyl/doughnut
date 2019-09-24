@@ -5,9 +5,9 @@ module type Address = sig
 
   val compare : t -> t -> int
 
-  val sexp_of_t : t -> Sexp.t
+  val sexp_of : t -> Sexp.t
 
-  val t_of_sexp : Sexp.t -> t
+  val of_sexp : Sexp.t -> t
 
   val random : unit -> t
 

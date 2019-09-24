@@ -2,6 +2,8 @@ open Core
 open Lwt_utils.O
 
 module Messages (Wire : Transport.Wire) = struct
+  type node = Wire.Address.t
+
   type query =
     | Successor of Wire.Address.t
     | Hello of {self: (query, response) Wire.peer; predecessor: Wire.Address.t}
@@ -27,7 +29,7 @@ module MakeDetails
             and module Wire = W) =
 struct
   module Address = T.Wire.Address
-  module Map = Map.Make (Address)
+  module Map = Stdlib.Map.Make (Address)
 
   type endpoint = T.endpoint
 
@@ -273,7 +275,7 @@ struct
                     Address.pp addr) ;
               (T.Messages.NotTheDroids, state) )
         | T.Messages.Get addr -> (
-          match Map.find state.values addr with
+          match Map.find_opt addr state.values with
           | Some value ->
               Logs.debug (fun m ->
                   m "%a: locally get %a" pp_node state Address.pp addr) ;
@@ -285,7 +287,7 @@ struct
               Logs.debug (fun m ->
                   m "%a: locally set %a" pp_node state Address.pp key) ;
               ( T.Messages.Done
-              , {state with values= Map.set state.values ~key ~data} ) )
+              , {state with values= Map.add key data state.values} ) )
             else (T.Messages.Not_found, state)
       in
       let* id, query = T.receive transport server in
@@ -336,7 +338,7 @@ struct
     successor node.transport node.state addr
     >>= function
     | None -> (
-      match Map.find node.state.values addr with
+      match Map.find_opt addr node.state.values with
       | Some value ->
           Lwt.return (Result.Ok value)
       | None ->
@@ -360,8 +362,9 @@ struct
     successor node.transport node.state key
     >>= function
     | None ->
-        ignore (Map.set node.state.values ~key ~data) ;
-        Lwt.return (Result.Ok ()) (* FIXME  *)
+        node.state <-
+          {node.state with values= Map.add key data node.state.values} ;
+        Lwt.return (Result.Ok ()) (* FIXME *)
     | Some ((peer_addr, ep), _) -> (
         let client = T.connect node.transport ep in
         T.send node.transport client (T.Messages.Set (key, data))
