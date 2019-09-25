@@ -1,47 +1,167 @@
 open Core
-open Lwt_utils.O
+open Sexplib
 
-module Messages (Wire : Transport.Wire) = struct
-  type node = Wire.Address.t
+module Result_o = struct
+  let ( let* ) = Result.( >>= )
+
+  let ( let+ ) = Result.( >>| )
+
+  let ( and* ) a b =
+    Result.bind a ~f:(fun a -> Result.bind b ~f:(fun b -> Result.Ok (a, b)))
+end
+
+module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
+  module Address = A
+  module Wire = Wire
+
+  type node = Address.t
+
+  type peer = node * Wire.endpoint
+
+  let peer_of_sexp =
+    let open Result_o in
+    function
+    | Sexp.List [addr; ep] ->
+        let* addr = Address.of_sexp addr in
+        let+ ep = Wire.endpoint_of_sexp ep in
+        (addr, ep)
+    | sexp ->
+        Result.Error (Format.asprintf "invalid peer: %a" Sexp.pp sexp)
+
+  let sexp_of_peer (addr, ep) =
+    Sexp.List [Address.sexp_of addr; Wire.sexp_of_endpoint ep]
+
+  let pp_peer fmt (addr, ep) =
+    Format.fprintf fmt "peer %a (%a)" Address.pp addr Wire.pp_endpoint ep
 
   type query =
-    | Successor of Wire.Address.t
-    | Hello of {self: (query, response) Wire.peer; predecessor: Wire.Address.t}
-    | Get of Wire.Address.t
-    | Set of Wire.Address.t * Bytes.t
+    | Successor of Address.t
+    | Hello of {self: peer; predecessor: Address.t}
+    | Get of Address.t
+    | Set of Address.t * Bytes.t
 
   and response =
-    | Found of (query, response) Wire.peer * (query, response) Wire.peer option
-    | Forward of
-        { forward: (query, response) Wire.peer
-        ; predecessor: (query, response) Wire.peer }
+    | Found of peer * peer option
+    | Forward of {forward: peer; predecessor: peer}
     | Welcome
     | NotTheDroids
     | Done
     | Not_found
     | Value of Bytes.t
+
+  let sexp_of_query = function
+    | Successor addr ->
+        Sexp.List [Sexp.Atom "successor"; Address.sexp_of addr]
+    | Hello {self; predecessor} ->
+        Sexp.List
+          [Sexp.Atom "hello"; sexp_of_peer self; Address.sexp_of predecessor]
+    | Get key ->
+        Sexp.List [Sexp.Atom "get"; Address.sexp_of key]
+    | Set (key, value) ->
+        Sexp.List
+          [ Sexp.Atom "set"
+          ; Address.sexp_of key
+          ; Sexp.Atom (Bytes.to_string value) ]
+
+  let query_of_sexp =
+    let open Result_o in
+    function
+    | Sexp.List [Sexp.Atom "successor"; addr] ->
+        let+ addr = Address.of_sexp addr in
+        Successor addr
+    | Sexp.List [Sexp.Atom "hello"; self; predecessor] ->
+        let* self = peer_of_sexp self
+        and* predecessor = Address.of_sexp predecessor in
+        Result.Ok (Hello {self; predecessor})
+    | Sexp.List [Sexp.Atom "get"; key] ->
+        let+ key = Address.of_sexp key in
+        Get key
+    | Sexp.List [Sexp.Atom "set"; key; Sexp.Atom value] ->
+        let+ key = Address.of_sexp key in
+        Set (key, Bytes.of_string value)
+    | invalid ->
+        Result.Error (Format.asprintf "invalid query: %a" Sexp.pp invalid)
+
+  let sexp_of_response = function
+    | Found (peer, pred) ->
+        let tail =
+          Option.value ~default:[]
+            (Option.map ~f:(fun p -> [sexp_of_peer p]) pred)
+        in
+        Sexp.List (Sexp.Atom "found" :: sexp_of_peer peer :: tail)
+    | Forward {forward; predecessor} ->
+        Sexp.List
+          [Sexp.Atom "forward"; sexp_of_peer forward; sexp_of_peer predecessor]
+    | Welcome ->
+        Sexp.List [Sexp.Atom "welcome"]
+    | NotTheDroids ->
+        Sexp.List [Sexp.Atom "not-the-droids"]
+    | Done ->
+        Sexp.List [Sexp.Atom "done"]
+    | Not_found ->
+        Sexp.List [Sexp.Atom "not-found"]
+    | Value b ->
+        Sexp.List [Sexp.Atom "value"; Sexp.Atom (Bytes.to_string b)]
+
+  let response_of_sexp =
+    let open Result_o in
+    function
+    | Sexp.List (Sexp.Atom "found" :: peer :: tail) when List.length tail <= 1
+      ->
+        let* pred =
+          match tail with
+          | [] ->
+              Result.Ok None
+          | [v] ->
+              let+ pred = peer_of_sexp v in
+              Some pred
+          | _ ->
+              failwith "unreachable"
+        and* peer = peer_of_sexp peer in
+        Result.Ok (Found (peer, pred))
+    | Sexp.List [Sexp.Atom "forward"; forward; predecessor] ->
+        let* forward = peer_of_sexp forward
+        and* predecessor = peer_of_sexp predecessor in
+        Result.Ok (Forward {forward; predecessor})
+    | Sexp.List [Sexp.Atom "welcome"] ->
+        Result.Ok Welcome
+    | Sexp.List [Sexp.Atom "not-the-droids"] ->
+        Result.Ok NotTheDroids
+    | Sexp.List [Sexp.Atom "done"] ->
+        Result.Ok Done
+    | Sexp.List [Sexp.Atom "not-found"] ->
+        Result.Ok Not_found
+    | Sexp.List [Sexp.Atom "value"; Sexp.Atom s] ->
+        Result.Ok (Value (Bytes.of_string s))
+    | sexp ->
+        Result.Error (Format.asprintf "invalid response: %a" Sexp.pp sexp)
 end
 
 module MakeDetails
+    (A : Implementation.Address)
     (W : Transport.Wire)
     (T : Transport.Transport
-           with module Messages = Messages(W)
-            and module Wire = W) =
+           with module Wire = W
+            and type Messages.query = Messages(A)(W).query
+            and type Messages.response = Messages(A)(W).response) =
 struct
-  module Address = T.Wire.Address
+  module Address = A
+  module Messages = Messages (A) (W)
+  module Transport = T
   module Map = Stdlib.Map.Make (Address)
 
-  type endpoint = T.endpoint
+  type endpoint = Transport.endpoint
 
-  type finger = T.peer option Array.t
+  type finger = Messages.peer option Array.t
 
   type state =
     { address: Address.t
-    ; predecessor: T.peer
+    ; predecessor: Messages.peer
     ; finger: finger
     ; values: Bytes.t Map.t }
 
-  type node = {mutable state: state; server: T.server; transport: T.t}
+  type node =
+    {mutable state: state; server: Transport.server; transport: Transport.t}
 
   let predecessor node = fst node.state.predecessor
 
@@ -78,7 +198,7 @@ struct
           let res = Core.Option.value_exn lookup in
           Logs.debug (fun m ->
               m "%a: finger response for %a: %a" pp_node state Address.pp addr
-                T.pp_peer res) ;
+                Messages.pp_peer res) ;
           Some res
       | None ->
           Logs.err (fun m -> m "ouhlala") ;
@@ -87,19 +207,20 @@ struct
   let successor_query transport state addr ep =
     Logs.debug (fun m -> m "%a: lookup (%a)" pp_node state Address.pp addr) ;
     let query ep =
-      let client = T.connect transport ep in
-      T.send transport client (T.Messages.Successor addr)
+      let client = Transport.connect transport ep in
+      Transport.send transport client (Messages.Successor addr)
     in
+    let open Lwt_utils.O_result in
     let rec finalize (peer, ep) =
       query ep
       >>= function
-      | T.Messages.Found (successor, predecessor) ->
-          Lwt.return (successor, predecessor)
-      | T.Messages.Forward {predecessor; _} ->
+      | Messages.Found (successor, predecessor) ->
+          Lwt_result.return (successor, predecessor)
+      | Messages.Forward {predecessor; _} ->
           Logs.debug (fun m ->
               m "%a: refusing to forward lookup (%a) past %a, backtrack to %a"
-                pp_node state Address.pp addr T.pp_peer (peer, ep) T.pp_peer
-                predecessor) ;
+                pp_node state Address.pp addr Messages.pp_peer (peer, ep)
+                Messages.pp_peer predecessor) ;
           (finalize [@tailcall]) predecessor
       | _ ->
           Lwt.fail (Failure "unexpected answer")
@@ -107,19 +228,19 @@ struct
     let rec iter (peer, ep) =
       query ep
       >>= function
-      | T.Messages.Found (successor, predecessor) ->
-          Lwt.return (successor, predecessor)
-      | T.Messages.Forward {forward= peer_addr, ep; _}
+      | Messages.Found (successor, predecessor) ->
+          Lwt_result.return (successor, predecessor)
+      | Messages.Forward {forward= peer_addr, ep; _}
         when Option.value_map peer ~default:false ~f:(fun peer ->
                  between addr peer peer_addr) ->
           Logs.debug (fun m ->
               m "%a: forward final lookup (%a) to %a" pp_node state Address.pp
-                addr T.pp_peer (peer_addr, ep)) ;
+                addr Messages.pp_peer (peer_addr, ep)) ;
           (finalize [@tailcall]) (peer_addr, ep)
-      | T.Messages.Forward {forward= (peer_addr, ep) as peer; _} ->
+      | Messages.Forward {forward= (peer_addr, ep) as peer; _} ->
           Logs.debug (fun m ->
               m "%a: forward lookup (%a) to %a" pp_node state Address.pp addr
-                T.pp_peer peer) ;
+                Messages.pp_peer peer) ;
           (iter [@tailcall]) (Some peer_addr, ep)
       | _ ->
           Lwt.fail (Failure "unexpected answer")
@@ -127,9 +248,10 @@ struct
     iter (None, ep)
 
   let successor transport state addr =
+    let open Lwt_utils.O_result in
     match finger state addr with
     | None ->
-        Lwt.return None
+        Lwt_result.return None
     | Some (_, ep) ->
         let+ succ = successor_query transport state addr ep in
         Some succ
@@ -150,7 +272,7 @@ struct
         if between pivot state.address addr then (
           Logs.debug (fun m ->
               m "%a: update finger entry %i (%a) to %a" pp_node state n
-                Address.pp pivot T.pp_peer (addr, ep)) ;
+                Address.pp pivot Messages.pp_peer (addr, ep)) ;
           Stdlib.Array.set finger index (Some (addr, ep)) ) ;
       if n < Address.space_log - 1 then (fill [@tailcall]) (n + 1)
     in
@@ -165,6 +287,7 @@ struct
         let open Address.O in
         state.address + Address.log n
       in
+      let open Lwt_utils.O_result in
       let* state =
         successor transport state pivot
         >>| function
@@ -176,26 +299,26 @@ struct
           match Stdlib.Array.get state.finger index with
           | Some (v, _) when Address.compare v a = 0 ->
               Logs.debug (fun m ->
-                  m "%a: leave finger entry %i to %a" pp_node state n T.pp_peer
-                    succ) ;
+                  m "%a: leave finger entry %i to %a" pp_node state n
+                    Messages.pp_peer succ) ;
               state
           | _ ->
               Logs.debug (fun m ->
                   m "%a: update finger entry %i (%a) to %a" pp_node state n
-                    Address.pp pivot T.pp_peer succ) ;
+                    Address.pp pivot Messages.pp_peer succ) ;
               let finger = Stdlib.Array.copy state.finger in
               Stdlib.Array.set finger index (Some succ) ;
               {state with finger} )
       in
-      if n = Address.space_log - 1 then Lwt.return state
+      if n = Address.space_log - 1 then Lwt_result.return state
       else (check [@tailcall]) state (n + 1)
     in
     check state 0
 
-  let rec make_details ?(transport = T.make ()) address endpoints : node Lwt.t
-      =
+  let rec make_details ?(transport = Transport.make ()) address endpoints =
     Logs.debug (fun m -> m "node(%a): make" Address.pp address) ;
-    let server = T.listen transport () in
+    let server = Transport.listen transport () in
+    let open Lwt_utils.O_result in
     let* successor, predecessor =
       match
         Core.List.find_map
@@ -212,19 +335,19 @@ struct
       | None ->
           Logs.warn (fun m ->
               m "node(%a): could not find predecessor" Address.pp address) ;
-          Lwt.return (None, None)
+          Lwt_result.return (None, None)
       | Some v ->
           let+ successor, predecessor = v in
           Logs.debug (fun m ->
-              m "node(%a): found successor: %a" Address.pp address T.pp_peer
-                successor) ;
+              m "node(%a): found successor: %a" Address.pp address
+                Messages.pp_peer successor) ;
           (Some successor, predecessor)
     in
     let state =
       let size = Address.space_log in
       let finger = Stdlib.Array.make size None in
       Stdlib.Array.set finger (size - 1) successor ;
-      let self = (address, T.endpoint transport server) in
+      let self = (address, Transport.endpoint transport server) in
       let predecessor = Core.Option.value predecessor ~default:self in
       let finger = Stdlib.Array.make Address.space_log None in
       {address; predecessor; finger; values= Map.empty}
@@ -238,24 +361,24 @@ struct
     in
     let res = {server; state; transport} in
     Logs.debug (fun m ->
-        m "node(%a): precedessor: %a" Address.pp address T.pp_peer
+        m "node(%a): precedessor: %a" Address.pp address Messages.pp_peer
           state.predecessor) ;
     let rec thread (server, state) =
       let respond = function
-        | T.Messages.Successor addr -> (
+        | Messages.Successor addr -> (
             Logs.debug (fun m ->
                 m "%a: query: successor %a" pp_node state Address.pp addr) ;
             match finger state addr with
             | None ->
-                ( T.Messages.Found
-                    ( (state.address, T.endpoint transport server)
+                ( Messages.Found
+                    ( (state.address, Transport.endpoint transport server)
                     , Some state.predecessor )
                 , state )
             | Some peer ->
-                ( T.Messages.Forward
+                ( Messages.Forward
                     {forward= peer; predecessor= state.predecessor}
                 , state ) )
-        | T.Messages.Hello {self= addr, ep; predecessor} ->
+        | Messages.Hello {self= addr, ep; predecessor} ->
             Logs.debug (fun m ->
                 m "%a: query: hello %a (%a)" pp_node state Address.pp addr
                   Address.pp predecessor) ;
@@ -265,7 +388,7 @@ struct
             then (
               Logs.debug (fun m ->
                   m "%a: new predecessor: %a" pp_node state Address.pp addr) ;
-              ( T.Messages.Welcome
+              ( Messages.Welcome
               , { state with
                   predecessor= (addr, ep)
                 ; finger= finger_add state state.finger (addr, ep) } ) )
@@ -273,116 +396,123 @@ struct
               Logs.debug (fun m ->
                   m "%a: unrelated or wrong predecessor: %a" pp_node state
                     Address.pp addr) ;
-              (T.Messages.NotTheDroids, state) )
-        | T.Messages.Get addr -> (
+              (Messages.NotTheDroids, state) )
+        | Messages.Get addr -> (
           match Map.find_opt addr state.values with
           | Some value ->
               Logs.debug (fun m ->
                   m "%a: locally get %a" pp_node state Address.pp addr) ;
-              (T.Messages.Value value, state)
+              (Messages.Value value, state)
           | None ->
-              (T.Messages.Not_found, state) )
-        | T.Messages.Set (key, data) ->
+              (Messages.Not_found, state) )
+        | Messages.Set (key, data) ->
             if own state key then (
               Logs.debug (fun m ->
                   m "%a: locally set %a" pp_node state Address.pp key) ;
-              ( T.Messages.Done
+              ( Messages.Done
               , {state with values= Map.add key data state.values} ) )
-            else (T.Messages.Not_found, state)
+            else (Messages.Not_found, state)
       in
-      let* id, query = T.receive transport server in
+      let open Lwt_utils.O in
+      let* id, query = Transport.receive transport server in
       let response, state = respond query in
       res.state <- state ;
-      let* () = T.respond transport server id response in
+      let* () = Transport.respond transport server id response in
       (thread [@tailcall]) (server, state)
     in
     let hello peer =
-      T.send transport
-        (T.connect transport (snd peer))
-        (T.Messages.Hello
-           { self= (state.address, T.endpoint transport server)
+      Transport.send transport
+        (Transport.connect transport (snd peer))
+        (Messages.Hello
+           { self= (state.address, Transport.endpoint transport server)
            ; predecessor= fst state.predecessor })
       >>= function
-      | T.Messages.Welcome ->
-          Lwt.return true
-      | T.Messages.NotTheDroids ->
-          Lwt.return false
+      | Messages.Welcome ->
+          Lwt_result.return true
+      | Messages.NotTheDroids ->
+          Lwt_result.return false
       | _ ->
-          Lwt.fail (Failure "unexpected answer")
+          Lwt_result.fail "unexpected answer"
     in
     let* joined =
       match Core.Option.map successor ~f:hello with
       | Some v ->
           v
       | _ ->
-          Lwt.return true
+          Lwt_result.return true
     in
     if joined then (
       Logs.debug (fun m -> m "%a: joined successfully" pp_node state) ;
       (* let* state = finger_check transport state in *)
       (* Logs.debug (fun m -> m "%a: finger initialized" pp_node state) ; *)
       (* let res = {res with state} in *)
-      ignore (thread (server, state)) ;
-      Lwt.return res )
+      let rec response_thread () =
+        Lwt.catch
+          (fun () -> thread (server, state))
+          (fun e ->
+            Logs.err (fun m ->
+                m "node(%a): fatal error in response thread: %a" Address.pp
+                  address Exn.pp e) ;
+            response_thread ())
+      in
+      ignore (response_thread ()) ;
+      Lwt_result.return res )
     else (
       (* FIXME: no need to rerun EVERYTHING *)
       Logs.debug (fun m ->
           m "%a: wrong successor or predecessor, restarting" pp_node state) ;
       (make_details [@tailcall]) ~transport address endpoints )
 
-  let make = make_details ~transport:(T.make ())
+  let make = make_details ~transport:(Transport.make ())
 
-  let endpoint node = T.endpoint node.transport node.server
+  let endpoint node = Transport.endpoint node.transport node.server
 
   let get node addr =
+    let open Lwt_utils.O_result in
     successor node.transport node.state addr
     >>= function
     | None -> (
       match Map.find_opt addr node.state.values with
       | Some value ->
-          Lwt.return (Result.Ok value)
+          Lwt_result.return value
       | None ->
-          Lwt.return
-            (Result.Error
-               (Format.asprintf "key %a not found locally" Address.pp addr)) )
+          Lwt_result.fail
+            (Format.asprintf "key %a not found locally" Address.pp addr) )
     | Some ((peer_addr, ep), _) -> (
-        let client = T.connect node.transport ep in
-        T.send node.transport client (T.Messages.Get addr)
-        >>| function
-        | T.Messages.Value v ->
-            Result.Ok v
-        | T.Messages.Not_found ->
-            Result.Error
+        let client = Transport.connect node.transport ep in
+        Transport.send node.transport client (Messages.Get addr)
+        >>= function
+        | Messages.Value v ->
+            Lwt_result.return v
+        | Messages.Not_found ->
+            Lwt_result.fail
               (Format.asprintf "key %a not found remotely on %a" Address.pp
                  addr Address.pp peer_addr)
         | _ ->
-            failwith "unexpected answer" )
+            Lwt_result.fail "unexpected answer" )
 
   let set node key data =
+    let open Lwt_utils.O_result in
     successor node.transport node.state key
     >>= function
     | None ->
         node.state <-
           {node.state with values= Map.add key data node.state.values} ;
-        Lwt.return (Result.Ok ()) (* FIXME *)
+        Lwt_result.return () (* FIXME *)
     | Some ((peer_addr, ep), _) -> (
-        let client = T.connect node.transport ep in
-        T.send node.transport client (T.Messages.Set (key, data))
-        >>| function
-        | T.Messages.Done ->
-            Result.Ok ()
-        | T.Messages.Not_found ->
-            Result.Error
+        let client = Transport.connect node.transport ep in
+        Transport.send node.transport client (Messages.Set (key, data))
+        >>= function
+        | Messages.Done ->
+            Lwt_result.return ()
+        | Messages.Not_found ->
+            Lwt_result.fail
               (Format.asprintf "key %a not set remotely on %a" Address.pp key
                  Address.pp peer_addr)
         | _ ->
-            failwith "unexpected answer" )
+            Lwt_result.fail "unexpected answer" )
 end
 
-module Make
-    (W : Transport.Wire)
-    (T : Transport.Transport
-           with module Messages = Messages(W)
-            and module Wire = W) :
-  Implementation.Implementation with type Address.t = W.Address.t =
-  MakeDetails (W) (T)
+(* module Make (A : Implementation.Address) (W : Transport.Wire) : *)
+(*   Implementation.Implementation with module Address = A = *)
+(*   MakeDetails (A) (W) (Transport.Make (W) (Messages (A) (W))) *)

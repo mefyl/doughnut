@@ -1,49 +1,34 @@
-module type Wire = sig
-  module Address : Implementation.Address
-
-  type ('a, 'b) client
-
-  type ('a, 'b) server
-
-  type ('a, 'b) endpoint
-
-  type ('a, 'b) peer = Address.t * ('a, 'b) endpoint
-end
+open Core
+open Sexplib
 
 module type Messages = sig
   type query
 
+  val sexp_of_query : query -> Sexp.t
+
+  val query_of_sexp : Sexp.t -> (query, string) Result.t
+
   type response
+
+  val sexp_of_response : response -> Sexp.t
+
+  val response_of_sexp : Sexp.t -> (response, string) Result.t
 end
 
-module Make (W : Wire) (M : Messages) : sig
-  module Wire : Wire
-
+module type Wire = sig
   type client
 
   type server
 
   type endpoint
 
-  type peer
-end
+  val pp_endpoint : Format.formatter -> endpoint -> unit
 
-module type Transport = sig
-  module Messages : Messages
+  val sexp_of_endpoint : endpoint -> Sexp.t
 
-  module Wire : Wire
-
-  type client = (Messages.query, Messages.response) Wire.client
-
-  type server = (Messages.query, Messages.response) Wire.server
-
-  type endpoint = (Messages.query, Messages.response) Wire.endpoint
-
-  type peer = (Messages.query, Messages.response) Wire.peer
+  val endpoint_of_sexp : Sexp.t -> (endpoint, string) Result.t
 
   type t
-
-  type id
 
   val make : unit -> t
 
@@ -53,47 +38,49 @@ module type Transport = sig
 
   val endpoint : t -> server -> endpoint
 
-  val send : t -> client -> Messages.query -> Messages.response Lwt.t
+  type id
+
+  val send : t -> client -> Sexp.t -> Sexp.t Lwt.t
+
+  val receive : t -> server -> (id * Sexp.t) Lwt.t
+
+  val respond : t -> server -> id -> Sexp.t -> unit Lwt.t
+end
+
+module Direct : Wire with type t = unit
+
+module type Transport = sig
+  module Messages : Messages
+
+  module Wire : Wire
+
+  type server = Wire.server
+
+  type client = Wire.client
+
+  type endpoint = Wire.endpoint
+
+  type id = Wire.id
+
+  type t
+
+  val wire : t -> Wire.t
+
+  val make : unit -> t
+
+  val connect : t -> endpoint -> client
+
+  val listen : t -> unit -> server
+
+  val endpoint : t -> server -> endpoint
+
+  val send :
+    t -> client -> Messages.query -> (Messages.response, string) Lwt_result.t
 
   val receive : t -> server -> (id * Messages.query) Lwt.t
 
   val respond : t -> server -> id -> Messages.response -> unit Lwt.t
-
-  val pp_peer : Format.formatter -> peer -> unit
 end
 
-module Direct : sig
-  module Wire (A : Implementation.Address) : Wire with type Address.t = A.t
-
-  module Transport (A : Implementation.Address) (Messages : Messages) : sig
-    module Wire : module type of Wire (A)
-
-    type client = (Messages.query, Messages.response) Wire.client
-
-    type server = (Messages.query, Messages.response) Wire.server
-
-    type endpoint = (Messages.query, Messages.response) Wire.endpoint
-
-    type peer = (Messages.query, Messages.response) Wire.peer
-
-    type t = unit
-
-    type id = unit
-
-    val make : unit -> t
-
-    val connect : t -> endpoint -> client
-
-    val listen : t -> unit -> server
-
-    val endpoint : t -> server -> endpoint
-
-    val send : t -> client -> Messages.query -> Messages.response Lwt.t
-
-    val receive : t -> server -> (id * Messages.query) Lwt.t
-
-    val respond : t -> server -> id -> Messages.response -> unit Lwt.t
-
-    val pp_peer : Format.formatter -> peer -> unit
-  end
-end
+module Make (W : Wire) (M : Messages) :
+  Transport with module Messages = M and module Wire = W

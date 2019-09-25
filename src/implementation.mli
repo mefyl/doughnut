@@ -7,7 +7,7 @@ module type Address = sig
 
   val sexp_of : t -> Sexp.t
 
-  val of_sexp : Sexp.t -> t
+  val of_sexp : Sexp.t -> (t, string) Result.t
 
   val random : unit -> t
 
@@ -43,11 +43,11 @@ module type Implementation = sig
 
   type endpoint
 
-  val make : Address.t -> endpoint list -> node Lwt.t
+  val make : Address.t -> endpoint list -> (node, string) Lwt_result.t
 
   val endpoint : node -> endpoint
 
-  val set : node -> Address.t -> Bytes.t -> (unit, string) Result.t Lwt.t
+  val set : node -> Address.t -> Bytes.t -> (unit, string) Lwt_result.t
 
-  val get : node -> Address.t -> (Bytes.t, string) Result.t Lwt.t
+  val get : node -> Address.t -> (Bytes.t, string) Lwt_result.t
 end

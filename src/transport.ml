@@ -1,51 +1,44 @@
-module type Wire = sig
-  module Address : Implementation.Address
+open Core
+open Sexplib
 
-  type ('a, 'b) client
+(* module Result_o = struct *)
+(*   let ( let* ) = Result.( >>= ) *)
 
-  type ('a, 'b) server
+(*   let ( let+ ) = Result.( >>| ) *)
+(* end *)
 
-  type ('a, 'b) endpoint
-
-  type ('a, 'b) peer = Address.t * ('a, 'b) endpoint
-end
+(* open Result_o *)
 
 module type Messages = sig
   type query
 
+  val sexp_of_query : query -> Sexp.t
+
+  val query_of_sexp : Sexp.t -> (query, string) Result.t
+
   type response
+
+  val sexp_of_response : response -> Sexp.t
+
+  val response_of_sexp : Sexp.t -> (response, string) Result.t
 end
 
-module Make (W : Wire) (M : Messages) = struct
-  module Wire = W
+module type Wire = sig
+  type client
 
-  type client = (M.query, M.response) Wire.client
+  type server
 
-  type server = (M.query, M.response) Wire.server
+  type endpoint
 
-  type endpoint = (M.query, M.response) Wire.endpoint
+  val pp_endpoint : Format.formatter -> endpoint -> unit
 
-  type peer = (M.query, M.response) Wire.peer
-end
+  val sexp_of_endpoint : endpoint -> Sexp.t
 
-module type Transport = sig
-  module Messages : Messages
-
-  module Wire : Wire
-
-  type client = (Messages.query, Messages.response) Wire.client
-
-  type server = (Messages.query, Messages.response) Wire.server
-
-  type endpoint = (Messages.query, Messages.response) Wire.endpoint
-
-  type peer = (Messages.query, Messages.response) Wire.peer
+  val endpoint_of_sexp : Sexp.t -> (endpoint, string) Result.t
 
   type t
 
   val make : unit -> t
-
-  type id
 
   val connect : t -> endpoint -> client
 
@@ -53,50 +46,131 @@ module type Transport = sig
 
   val endpoint : t -> server -> endpoint
 
-  val send : t -> client -> Messages.query -> Messages.response Lwt.t
+  type id
+
+  val send : t -> client -> Sexp.t -> Sexp.t Lwt.t
+
+  val receive : t -> server -> (id * Sexp.t) Lwt.t
+
+  val respond : t -> server -> id -> Sexp.t -> unit Lwt.t
+end
+
+module Direct = struct
+  type server = int * (Sexp.t, Sexp.t) Lwt_utils.RPC.t
+
+  type client = server
+
+  type endpoint = server
+
+  module Map = Stdlib.Map.Make (Int)
+
+  let count = ref 0
+
+  let map = ref Map.empty
+
+  let pp_endpoint fmt (id, _) = Format.pp_print_int fmt id
+
+  let sexp_of_endpoint (id, ep) =
+    map := Map.add id ep !map ;
+    Sexp.Atom (string_of_int id)
+
+  let endpoint_of_sexp = function
+    | Sexp.Atom s -> (
+      match int_of_string_opt s with
+      | Some id -> (
+        match Map.find_opt id !map with
+        | Some v ->
+            Result.Ok (id, v)
+        | None ->
+            Result.Error ("no such endpoint: " ^ s) )
+      | None ->
+          Result.Error ("invalid endpoint: " ^ s) )
+    | sexp ->
+        Result.Error (Format.asprintf "invalid endpoint: %a" Sexp.pp sexp)
+
+  type t = unit
+
+  type id = unit
+
+  let make () = ()
+
+  let connect _ ep = ep
+
+  let listen _ () =
+    count := !count + 1 ;
+    (!count - 1, Lwt_utils.RPC.make ())
+
+  let endpoint _ s = s
+
+  let send _ (_, rpc) query =
+    Logs.debug (fun m -> m "send %a" Sexp.pp query) ;
+    Lwt_utils.RPC.send rpc query
+
+  let receive _ (_, rpc) =
+    Lwt.bind (Lwt_utils.RPC.receive rpc) (fun query ->
+        Logs.debug (fun m -> m "receive %a" Sexp.pp query) ;
+        Lwt.return ((), query))
+
+  let respond _ (_, rpc) () resp =
+    Logs.debug (fun m -> m "respond %a" Sexp.pp resp) ;
+    Lwt_utils.RPC.respond rpc resp
+end
+
+module type Transport = sig
+  module Messages : Messages
+
+  module Wire : Wire
+
+  type server = Wire.server
+
+  type client = Wire.client
+
+  type endpoint = Wire.endpoint
+
+  type id = Wire.id
+
+  type t
+
+  val wire : t -> Wire.t
+
+  val make : unit -> t
+
+  val connect : t -> endpoint -> client
+
+  val listen : t -> unit -> server
+
+  val endpoint : t -> server -> endpoint
+
+  val send :
+    t -> client -> Messages.query -> (Messages.response, string) Lwt_result.t
 
   val receive : t -> server -> (id * Messages.query) Lwt.t
 
   val respond : t -> server -> id -> Messages.response -> unit Lwt.t
-
-  val pp_peer : Format.formatter -> peer -> unit
 end
 
-module Direct = struct
-  module Wire (A : Implementation.Address) = struct
-    module Address = A
+module Make (W : Wire) (M : Messages) = struct
+  module Messages = M
+  module Wire = W
+  include Wire
 
-    type ('a, 'b) server = ('a, 'b) Lwt_utils.RPC.t
+  let wire x = x
 
-    and ('a, 'b) client = ('a, 'b) server
+  let send t client query =
+    let open Lwt_utils.O in
+    let+ response = Wire.send (wire t) client (Messages.sexp_of_query query) in
+    Messages.response_of_sexp response
 
-    and ('a, 'b) endpoint = ('a, 'b) server
+  let rec receive t server =
+    let open Lwt_utils.O in
+    let* id, query = Wire.receive (wire t) server in
+    match Messages.query_of_sexp query with
+    | Result.Ok query ->
+        Lwt.return (id, query)
+    | Result.Error s ->
+        let* () = Logs_lwt.warn (fun m -> m "error receiving query: %s" s) in
+        receive (wire t) server
 
-    and ('a, 'b) peer = Address.t * ('a, 'b) endpoint
-  end
-
-  module Transport (A : Implementation.Address) (Messages : Messages) = struct
-    include Make (Wire (A)) (Messages)
-
-    type t = unit
-
-    type id = unit
-
-    let make () = ()
-
-    let connect _ e = e
-
-    let listen _ () = Lwt_utils.RPC.make ()
-
-    let endpoint _ s = s
-
-    let send _ = Lwt_utils.RPC.send
-
-    let receive _ rpc =
-      Lwt.bind (Lwt_utils.RPC.receive rpc) (fun msg -> Lwt.return ((), msg))
-
-    let respond _ rpc () resp = Lwt_utils.RPC.respond rpc resp
-
-    let pp_peer fmt (addr, _) = A.pp fmt addr
-  end
+  let respond t server id response =
+    Wire.respond (wire t) server id (Messages.sexp_of_response response)
 end
