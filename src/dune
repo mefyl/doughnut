@@ -1,4 +1,6 @@
-(library (name dht)
-         (modules chord implementation lwt_utils transport)
-         (modules_without_implementation implementation)
-         (libraries core logs  logs.lwt lwt threads.posix))
+(library
+ (name dht)
+ (public_name dht)
+ (modules chord implementation lwt_utils transport)
+ (modules_without_implementation implementation)
+ (libraries core logs logs.lwt lwt threads.posix))
