@@ -15,4 +15,4 @@ install:
   - make -f Makefile.ci dependencies
 script:
   - eval $(opam env)
-  - dune build @check
+  - dune runtest

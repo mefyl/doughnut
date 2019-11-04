@@ -1,6 +1,3 @@
-(executable (name main)
-            (libraries dht logs logs.threaded lwt.unix oUnit))
-
-(alias (name check)
-       (deps main.exe)
-       (action (run ./main.exe)))
+(test
+ (name main)
+ (libraries dht logs logs.threaded lwt.unix oUnit))
