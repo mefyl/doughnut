@@ -13,6 +13,12 @@ module type Messages = sig
   val sexp_of_response : response -> Sexp.t
 
   val response_of_sexp : Sexp.t -> (response, string) Result.t
+
+  type info
+
+  val sexp_of_info : info -> Sexp.t
+
+  val info_of_sexp : Sexp.t -> (info, string) Result.t
 end
 
 module type Wire = sig
@@ -45,6 +51,8 @@ module type Wire = sig
   val receive : t -> server -> (id * Sexp.t) Lwt.t
 
   val respond : t -> server -> id -> Sexp.t -> unit Lwt.t
+
+  val inform : t -> client -> Sexp.t -> unit
 end
 
 module Direct : Wire with type t = unit
@@ -80,6 +88,8 @@ module type Transport = sig
   val receive : t -> server -> (id * Messages.query) Lwt.t
 
   val respond : t -> server -> id -> Messages.response -> unit Lwt.t
+
+  val inform : t -> client -> Messages.info -> unit
 end
 
 module Make (W : Wire) (M : Messages) :

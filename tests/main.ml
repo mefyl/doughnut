@@ -90,6 +90,8 @@ module Transport = struct
   let receive t = receive t.wrapped
 
   let respond t = respond t.wrapped
+
+  let inform t = inform t.wrapped
 end
 
 module Dht = Dht.Chord.MakeDetails (Address) (Dht.Transport.Direct) (Transport)

@@ -6,7 +6,7 @@ module Result_o = struct
 
   let ( let+ ) = Result.( >>| )
 
-  let ( and* ) a b =
+  let ( and+ ) a b =
     Result.bind a ~f:(fun a -> Result.bind b ~f:(fun b -> Result.Ok (a, b)))
 end
 
@@ -49,6 +49,8 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
     | Not_found
     | Value of Bytes.t
 
+  and info = Invalidate of {address: Address.t; actual: peer}
+
   let sexp_of_query = function
     | Successor addr ->
         Sexp.List [Sexp.Atom "successor"; Address.sexp_of addr]
@@ -71,7 +73,7 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
         Successor addr
     | Sexp.List [Sexp.Atom "hello"; self; predecessor] ->
         let* self = peer_of_sexp self
-        and* predecessor = Address.of_sexp predecessor in
+        and+ predecessor = Address.of_sexp predecessor in
         Result.Ok (Hello {self; predecessor})
     | Sexp.List [Sexp.Atom "get"; key] ->
         let+ key = Address.of_sexp key in
@@ -117,11 +119,11 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
               Some pred
           | _ ->
               failwith "unreachable"
-        and* peer = peer_of_sexp peer in
+        and+ peer = peer_of_sexp peer in
         Result.Ok (Found (peer, pred))
     | Sexp.List [Sexp.Atom "forward"; forward; predecessor] ->
         let* forward = peer_of_sexp forward
-        and* predecessor = peer_of_sexp predecessor in
+        and+ predecessor = peer_of_sexp predecessor in
         Result.Ok (Forward {forward; predecessor})
     | Sexp.List [Sexp.Atom "welcome"] ->
         Result.Ok Welcome
@@ -135,6 +137,21 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
         Result.Ok (Value (Bytes.of_string s))
     | sexp ->
         Result.Error (Format.asprintf "invalid response: %a" Sexp.pp sexp)
+
+  let sexp_of_info = function
+    | Invalidate {address; actual} ->
+        Sexp.List
+          [Sexp.Atom "invalidate"; Address.sexp_of address; sexp_of_peer actual]
+
+  let info_of_sexp =
+    let open Result_o in
+    function
+    | Sexp.List [Sexp.Atom "invalidate"; address; actual] ->
+        let* address = Address.of_sexp address
+        and+ actual = peer_of_sexp actual in
+        Result.Ok (Invalidate {address; actual})
+    | sexp ->
+        Result.Error (Format.asprintf "invalid response: %a" Sexp.pp sexp)
 end
 
 module MakeDetails
@@ -143,7 +160,8 @@ module MakeDetails
     (T : Transport.Transport
            with module Wire = W
             and type Messages.query = Messages(A)(W).query
-            and type Messages.response = Messages(A)(W).response) =
+            and type Messages.response = Messages(A)(W).response
+            and type Messages.info = Messages(A)(W).info) =
 struct
   module Address = A
   module Messages = Messages (A) (W)
@@ -211,17 +229,24 @@ struct
       Transport.send transport client (Messages.Successor addr)
     in
     let open Lwt_utils.O_result in
-    let rec finalize (peer, ep) =
+    let rec finalize initiator ?(failed = false) (peer, ep) =
       query ep
       >>= function
       | Messages.Found (successor, predecessor) ->
+          if failed then (
+            let client = Transport.connect transport (snd initiator) in
+            Logs.debug (fun m ->
+                m "%a: invalidate %a on %a to %a" pp_node state Address.pp addr
+                  Messages.pp_peer initiator Messages.pp_peer successor) ;
+            Transport.inform transport client
+              (Messages.Invalidate {address= addr; actual= successor}) ) ;
           Lwt_result.return (successor, predecessor)
       | Messages.Forward {predecessor; _} ->
           Logs.debug (fun m ->
               m "%a: refusing to forward lookup (%a) past %a, backtrack to %a"
                 pp_node state Address.pp addr Messages.pp_peer (peer, ep)
                 Messages.pp_peer predecessor) ;
-          (finalize [@tailcall]) predecessor
+          (finalize [@tailcall]) initiator ~failed:true predecessor
       | _ ->
           Lwt.fail (Failure "unexpected answer")
     in
@@ -236,7 +261,7 @@ struct
           Logs.debug (fun m ->
               m "%a: forward final lookup (%a) to %a" pp_node state Address.pp
                 addr Messages.pp_peer (peer_addr, ep)) ;
-          (finalize [@tailcall]) (peer_addr, ep)
+          (finalize [@tailcall]) (peer_addr, ep) (peer_addr, ep)
       | Messages.Forward {forward= (peer_addr, ep) as peer; _} ->
           Logs.debug (fun m ->
               m "%a: forward lookup (%a) to %a" pp_node state Address.pp addr
