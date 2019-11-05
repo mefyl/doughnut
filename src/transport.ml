@@ -57,15 +57,22 @@ module Direct = struct
     Lwt_utils.RPC.send rpc query
 
   let receive _ (_, rpc, _) =
-    Lwt.bind (Lwt_utils.RPC.receive rpc) (fun query ->
-        Logs.debug (fun m -> m "receive %a" Sexp.pp query) ;
-        Lwt.return ((), query))
+    let open Lwt_utils.O in
+    let+ query = Lwt_utils.RPC.receive rpc in
+    Logs.debug (fun m -> m "receive %a" Sexp.pp query) ;
+    ((), query)
 
   let respond _ (_, rpc, _) () resp =
     Logs.debug (fun m -> m "respond %a" Sexp.pp resp) ;
     Lwt_utils.RPC.respond rpc resp
 
   let inform _ (_, _, (_, send)) info = send (Some info)
+
+  let learn _ (_, _, (stream, _)) =
+    let open Lwt_utils.O in
+    let+ info = Lwt_stream.next stream in
+    Logs.debug (fun m -> m "receive information %a" Sexp.pp info) ;
+    info
 end
 
 module Make (W : Wire) (M : Messages) = struct
@@ -97,4 +104,14 @@ module Make (W : Wire) (M : Messages) = struct
 
   let inform t client info =
     Wire.inform (wire t) client (Messages.sexp_of_message info)
+
+  let rec learn t server =
+    let open Lwt_utils.O in
+    let* info = Wire.learn (wire t) server in
+    match Messages.info_of_sexp info with
+    | Result.Ok info ->
+        Lwt.return info
+    | Result.Error s ->
+        let* () = Logs_lwt.warn (fun m -> m "error receiving info: %s" s) in
+        learn (wire t) server
 end

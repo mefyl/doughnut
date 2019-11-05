@@ -54,6 +54,8 @@ module type Wire = sig
   val respond : t -> server -> id -> Sexp.t -> unit Lwt.t
 
   val inform : t -> client -> Sexp.t -> unit
+
+  val learn : t -> server -> Sexp.t Lwt.t
 end
 
 module type Transport = sig
@@ -93,4 +95,6 @@ module type Transport = sig
     t -> server -> id -> MessagesType.response Messages.message -> unit Lwt.t
 
   val inform : t -> client -> MessagesType.info Messages.message -> unit
+
+  val learn : t -> server -> MessagesType.info Messages.message Lwt.t
 end
