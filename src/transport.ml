@@ -77,7 +77,9 @@ module Make (W : Wire) (M : Messages) = struct
 
   let send t client query =
     let open Lwt_utils.O in
-    let+ response = Wire.send (wire t) client (Messages.sexp_of_query query) in
+    let+ response =
+      Wire.send (wire t) client (Messages.sexp_of_message query)
+    in
     Messages.response_of_sexp response
 
   let rec receive t server =
@@ -91,8 +93,8 @@ module Make (W : Wire) (M : Messages) = struct
         receive (wire t) server
 
   let respond t server id response =
-    Wire.respond (wire t) server id (Messages.sexp_of_response response)
+    Wire.respond (wire t) server id (Messages.sexp_of_message response)
 
   let inform t client info =
-    Wire.inform (wire t) client (Messages.sexp_of_info info)
+    Wire.inform (wire t) client (Messages.sexp_of_message info)
 end

@@ -33,24 +33,24 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
     Format.fprintf fmt "peer %a (%a)" Address.pp address Wire.pp_endpoint
       endpoint
 
-  type query =
-    | Successor of Address.t
-    | Hello of {self: peer; predecessor: Address.t}
-    | Get of Address.t
-    | Set of Address.t * Bytes.t
+  open Transport.MessagesType
 
-  and response =
-    | Found of peer * peer option
-    | Forward of {forward: peer; predecessor: peer}
-    | Welcome
-    | NotTheDroids
-    | Done
-    | Not_found
-    | Value of Bytes.t
+  type _ message =
+    | Successor : Address.t -> query message
+    | Hello : {self: peer; predecessor: Address.t} -> query message
+    | Get : Address.t -> query message
+    | Set : Address.t * Bytes.t -> query message
+    | Found : peer * peer option -> response message
+    | Forward : {forward: peer; predecessor: peer} -> response message
+    | Welcome : response message
+    | NotTheDroids : response message
+    | Done : response message
+    | Not_found : response message
+    | Value : Bytes.t -> response message
+    | Invalidate : {address: Address.t; actual: peer} -> info message
 
-  and info = Invalidate of {address: Address.t; actual: peer}
-
-  let sexp_of_query = function
+  let sexp_of_message (type m) (msg : m message) =
+    match msg with
     | Successor addr ->
         Sexp.List [Sexp.Atom "successor"; Address.sexp_of addr]
     | Hello {self; predecessor} ->
@@ -63,27 +63,6 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
           [ Sexp.Atom "set"
           ; Address.sexp_of key
           ; Sexp.Atom (Bytes.to_string value) ]
-
-  let query_of_sexp =
-    let open Result_o in
-    function
-    | Sexp.List [Sexp.Atom "successor"; addr] ->
-        let+ addr = Address.of_sexp addr in
-        Successor addr
-    | Sexp.List [Sexp.Atom "hello"; self; predecessor] ->
-        let* self = peer_of_sexp self
-        and+ predecessor = Address.of_sexp predecessor in
-        Result.Ok (Hello {self; predecessor})
-    | Sexp.List [Sexp.Atom "get"; key] ->
-        let+ key = Address.of_sexp key in
-        Get key
-    | Sexp.List [Sexp.Atom "set"; key; Sexp.Atom value] ->
-        let+ key = Address.of_sexp key in
-        Set (key, Bytes.of_string value)
-    | invalid ->
-        Result.Error (Format.asprintf "invalid query: %a" Sexp.pp invalid)
-
-  let sexp_of_response = function
     | Found (peer, pred) ->
         let tail =
           Option.value ~default:[]
@@ -103,6 +82,28 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
         Sexp.List [Sexp.Atom "not-found"]
     | Value b ->
         Sexp.List [Sexp.Atom "value"; Sexp.Atom (Bytes.to_string b)]
+    | Invalidate {address; actual} ->
+        Sexp.List
+          [Sexp.Atom "invalidate"; Address.sexp_of address; sexp_of_peer actual]
+
+  let query_of_sexp =
+    let open Result_o in
+    function
+    | Sexp.List [Sexp.Atom "successor"; addr] ->
+        let+ addr = Address.of_sexp addr in
+        Successor addr
+    | Sexp.List [Sexp.Atom "hello"; self; predecessor] ->
+        let* self = peer_of_sexp self
+        and+ predecessor = Address.of_sexp predecessor in
+        Result.Ok (Hello {self; predecessor})
+    | Sexp.List [Sexp.Atom "get"; key] ->
+        let+ key = Address.of_sexp key in
+        Get key
+    | Sexp.List [Sexp.Atom "set"; key; Sexp.Atom value] ->
+        let+ key = Address.of_sexp key in
+        Set (key, Bytes.of_string value)
+    | invalid ->
+        Result.Error (Format.asprintf "invalid query: %a" Sexp.pp invalid)
 
   let response_of_sexp =
     let open Result_o in
@@ -137,11 +138,6 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
     | sexp ->
         Result.Error (Format.asprintf "invalid response: %a" Sexp.pp sexp)
 
-  let sexp_of_info = function
-    | Invalidate {address; actual} ->
-        Sexp.List
-          [Sexp.Atom "invalidate"; Address.sexp_of address; sexp_of_peer actual]
-
   let info_of_sexp =
     let open Result_o in
     function
@@ -158,9 +154,7 @@ module MakeDetails
     (W : Transport.Wire)
     (T : Transport.Transport
            with module Wire = W
-            and type Messages.query = Messages(A)(W).query
-            and type Messages.response = Messages(A)(W).response
-            and type Messages.info = Messages(A)(W).info) =
+            and type 'a Messages.message = 'a Messages(A)(W).message) =
 struct
   module Address = A
   module Messages = Messages (A) (W)

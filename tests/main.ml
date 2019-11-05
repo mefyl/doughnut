@@ -47,11 +47,12 @@ module Address : Dht.Implementation.Address with type t = int = struct
 end
 
 module ChordMessages = Dht.Chord.Messages (Address) (Dht.Transport.Direct)
+open Dht.Transport.MessagesType
 
 module Transport = struct
   include Dht.Transport.Make (Dht.Transport.Direct) (ChordMessages)
 
-  type filter = Passthrough | Response of ChordMessages.response
+  type filter = Passthrough | Response of response ChordMessages.message
 
   type stats = {mutable filtered: int}
 
@@ -59,8 +60,8 @@ module Transport = struct
 
   type t =
     { wrapped: wrapped
-    ; query_filter: stats -> ChordMessages.query -> bool
-    ; query: (ChordMessages.query, filter) Lwt_utils.RPC.t
+    ; query_filter: stats -> query ChordMessages.message -> bool
+    ; query: (query ChordMessages.message, filter) Lwt_utils.RPC.t
     ; stats: stats }
 
   let wire t = wire t.wrapped

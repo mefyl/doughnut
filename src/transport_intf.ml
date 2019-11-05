@@ -1,23 +1,25 @@
 open Core
 
+module MessagesType = struct
+  type query = Query
+
+  type response = Response
+
+  type info = Info
+end
+
 module type Messages = sig
-  type query
+  type 'a message
 
-  val sexp_of_query : query -> Sexp.t
+  open MessagesType
 
-  val query_of_sexp : Sexp.t -> (query, string) Result.t
+  val sexp_of_message : 'a message -> Sexp.t
 
-  type response
+  val query_of_sexp : Sexp.t -> (query message, string) Result.t
 
-  val sexp_of_response : response -> Sexp.t
+  val response_of_sexp : Sexp.t -> (response message, string) Result.t
 
-  val response_of_sexp : Sexp.t -> (response, string) Result.t
-
-  type info
-
-  val sexp_of_info : info -> Sexp.t
-
-  val info_of_sexp : Sexp.t -> (info, string) Result.t
+  val info_of_sexp : Sexp.t -> (info message, string) Result.t
 end
 
 module type Wire = sig
@@ -80,11 +82,15 @@ module type Transport = sig
   val endpoint : t -> server -> endpoint
 
   val send :
-    t -> client -> Messages.query -> (Messages.response, string) Lwt_result.t
+       t
+    -> client
+    -> MessagesType.query Messages.message
+    -> (MessagesType.response Messages.message, string) Lwt_result.t
 
-  val receive : t -> server -> (id * Messages.query) Lwt.t
+  val receive : t -> server -> (id * MessagesType.query Messages.message) Lwt.t
 
-  val respond : t -> server -> id -> Messages.response -> unit Lwt.t
+  val respond :
+    t -> server -> id -> MessagesType.response Messages.message -> unit Lwt.t
 
-  val inform : t -> client -> Messages.info -> unit
+  val inform : t -> client -> MessagesType.info Messages.message -> unit
 end
