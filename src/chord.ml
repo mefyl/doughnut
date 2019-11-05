@@ -1,13 +1,13 @@
-open Core
-open Sexplib
+module Sexp = Core.Sexp
 
 module Result_o = struct
-  let ( let* ) = Result.( >>= )
+  let ( let* ) = Core.Result.( >>= )
 
-  let ( let+ ) = Result.( >>| )
+  let ( let+ ) = Core.Result.( >>| )
 
   let ( and+ ) a b =
-    Result.bind a ~f:(fun a -> Result.bind b ~f:(fun b -> Result.Ok (a, b)))
+    Core.Result.bind a ~f:(fun a ->
+        Core.Result.bind b ~f:(fun b -> Core.Result.Ok (a, b)))
 end
 
 module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
@@ -447,9 +447,22 @@ struct
       let+ () = Transport.respond transport server id response in
       state
     and learn_thread () =
-      let learn = function Messages.Invalidate _ -> res.state in
       let open Lwt_utils.O in
-      let+ info = Transport.learn transport server in
+      let learn = function
+        | Messages.Invalidate {address; actual} ->
+            (* FIXME: check it's somewhat valid *)
+            let current = finger res.state address in
+            let+ () =
+              Logs_lwt.debug (fun m ->
+                  m "%a: fix finger for %a with %a (was %a)" pp_node res.state
+                    Address.pp address Messages.pp_peer actual
+                    (Option.pp Messages.pp_peer)
+                    current)
+            in
+            { res.state with
+              finger= finger_add res.state res.state.finger actual }
+      in
+      let* info = Transport.learn transport server in
       learn info
     and safe_recurse f =
       let open Lwt_utils.O in
@@ -461,7 +474,7 @@ struct
         (fun e ->
           Logs.err (fun m ->
               m "node(%a): fatal error in message thread: %a" Address.pp
-                address Exn.pp e) ;
+                address Core.Exn.pp e) ;
           safe_recurse f)
     in
     let hello (peer : Messages.peer) =
