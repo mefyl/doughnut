@@ -444,18 +444,20 @@ struct
       let open Lwt_utils.O in
       let* id, query = Transport.receive transport server in
       let response, state = respond query in
-      res.state <- state ;
-      let* () = Transport.respond transport server id response in
-      (respond_thread [@tailcall]) ()
+      let+ () = Transport.respond transport server id response in
+      state
     and learn_thread () =
       let learn = function Messages.Invalidate _ -> res.state in
       let open Lwt_utils.O in
-      let* info = Transport.learn transport server in
-      res.state <- learn info ;
-      (learn_thread [@tailcall]) ()
+      let+ info = Transport.learn transport server in
+      learn info
     and safe_recurse f =
+      let open Lwt_utils.O in
       Lwt.catch
-        (fun () -> f ())
+        (fun () ->
+          let* state = f () in
+          res.state <- state ;
+          safe_recurse f)
         (fun e ->
           Logs.err (fun m ->
               m "node(%a): fatal error in message thread: %a" Address.pp
