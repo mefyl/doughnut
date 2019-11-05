@@ -177,9 +177,9 @@ let chord_join_race order ctxt =
       Lwt.map Result.return (Lwt_utils.RPC.receive transport_b.query)
     in
     let check_query s p = function
-      | ChordMessages.Hello {self= self, _; predecessor} ->
+      | ChordMessages.Hello {self; predecessor} ->
           let printer = Address.to_string in
-          OUnit2.assert_equal ~ctxt ~printer s self ;
+          OUnit2.assert_equal ~ctxt ~printer s self.address ;
           OUnit2.assert_equal ~ctxt ~printer p predecessor
       | _ ->
           OUnit2.assert_string "wrong query"
