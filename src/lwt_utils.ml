@@ -65,3 +65,12 @@ module RPC = struct
     (* FIXME: sync ? *)
     Lwt.return (receive (Some r))
 end
+
+(* let 'a 'b split = Left of 'a | Right of 'b
+ *
+ * let poll a b =
+ *   let open O in
+ *   let a = Lwt.map (fun x -> Left x) a
+ *   and b = Lwt.map (fun x -> Right x) b in
+ *   Lwt.choose [a; b] >>= function
+ *   | Left v -> *)
