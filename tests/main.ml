@@ -11,10 +11,9 @@ module Address : Dht.Implementation.Address with type t = int = struct
 
   let of_sexp = function
     | Sexp.Atom s -> (
-      try Result.Ok (int_of_string s)
-      with Failure _ -> Result.Error ("invalid integer address: " ^ s) )
-    | sexp ->
-        Result.Error (Format.asprintf "invalid address: %a" Sexp.pp sexp)
+        try Result.Ok (int_of_string s)
+        with Failure _ -> Result.Error ("invalid integer address: " ^ s) )
+    | sexp -> Result.Error (Format.asprintf "invalid address: %a" Sexp.pp sexp)
 
   let random () = Random.int 255
 
@@ -54,23 +53,26 @@ module Transport = struct
 
   type filter = Passthrough | Response of response ChordMessages.message
 
-  type stats = {mutable filtered: int}
+  type stats = { mutable filtered : int }
 
   type wrapped = t
 
-  type t =
-    { wrapped: wrapped
-    ; query_filter: stats -> query ChordMessages.message -> bool
-    ; query: (query ChordMessages.message, filter) Lwt_utils.RPC.t
-    ; stats: stats }
+  type t = {
+    wrapped : wrapped;
+    query_filter : stats -> query ChordMessages.message -> bool;
+    query : (query ChordMessages.message, filter) Lwt_utils.RPC.t;
+    stats : stats;
+  }
 
   let wire t = wire t.wrapped
 
   let make_details query_filter =
-    { wrapped= make ()
-    ; query_filter
-    ; query= Lwt_utils.RPC.make ()
-    ; stats= {filtered= 0} }
+    {
+      wrapped = make ();
+      query_filter;
+      query = Lwt_utils.RPC.make ();
+      stats = { filtered = 0 };
+    }
 
   let make () = make_details (fun _ _ -> false)
 
@@ -82,10 +84,10 @@ module Transport = struct
 
   let send t c m =
     if t.query_filter t.stats m then (
-      t.stats.filtered <- t.stats.filtered + 1 ;
-      Lwt.map Result.return (Lwt_utils.RPC.send t.query m)
-      >>= function
-      | Passthrough -> send t.wrapped c m | Response r -> Lwt_result.return r )
+      t.stats.filtered <- t.stats.filtered + 1;
+      Lwt.map Result.return (Lwt_utils.RPC.send t.query m) >>= function
+      | Passthrough -> send t.wrapped c m
+      | Response r -> Lwt_result.return r )
     else send t.wrapped c m
 
   let receive t = receive t.wrapped
@@ -100,8 +102,8 @@ end
 module Dht = Dht.Chord.MakeDetails (Address) (Dht.Transport.Direct) (Transport)
 
 let () =
-  Logs.set_level (Some Logs.Debug) ;
-  Logs.set_reporter (Logs.format_reporter ()) ;
+  Logs.set_level (Some Logs.Debug);
+  Logs.set_reporter (Logs.format_reporter ());
   Logs_threaded.enable ()
 
 open OUnit2
@@ -115,7 +117,7 @@ let generic_single _ =
 
 let generic_join _ =
   let main =
-    let addresses = [0; 100; 200; 50; 250; 150] in
+    let addresses = [ 0; 100; 200; 50; 250; 150 ] in
     let open Lwt_utils.O in
     let* dhts =
       let open Lwt_utils.O_result in
@@ -126,15 +128,15 @@ let generic_join _ =
     let endpoints, dhts = Result.ok_or_failwith dhts in
     List.iter
       ~f:(fun dht -> Logs.debug (fun m -> m "  dht: %a" Dht.pp_node dht.state))
-      dhts ;
-    ignore endpoints ;
+      dhts;
+    ignore endpoints;
     let* res = Dht.set (List.hd_exn dhts) 50 (Bytes.of_string "50") in
-    Result.ok_or_failwith res ;
+    Result.ok_or_failwith res;
     let* res = Dht.set (List.hd_exn dhts) 150 (Bytes.of_string "150") in
-    Result.ok_or_failwith res ;
+    Result.ok_or_failwith res;
     let* res = Dht.get (List.hd_exn dhts) 150 in
     OUnit.assert_equal ~printer:Bytes.to_string (Bytes.of_string "150")
-      (Result.ok_or_failwith res) ;
+      (Result.ok_or_failwith res);
     let+ res = Dht.get (List.hd_exn dhts) 50 in
     OUnit.assert_equal ~printer:Bytes.to_string (Bytes.of_string "50")
       (Result.ok_or_failwith res)
@@ -159,10 +161,10 @@ is. *)
 let chord_join_race order ctxt =
   let main =
     let* dht_pred = Dht.make 0 [] in
-    let* dht_succ = Dht.make 100 [Dht.endpoint dht_pred] in
-    let eps = [Dht.endpoint dht_pred; Dht.endpoint dht_succ] in
+    let* dht_succ = Dht.make 100 [ Dht.endpoint dht_pred ] in
+    let eps = [ Dht.endpoint dht_pred; Dht.endpoint dht_succ ] in
     let filter = function
-      | {Transport.filtered} -> (
+      | { Transport.filtered } -> (
           function ChordMessages.Hello _ -> filtered = 0 | _ -> false )
     in
     let transport_a = Transport.make_details filter
@@ -170,25 +172,22 @@ let chord_join_race order ctxt =
     let make_dht (transport, addr, pred) =
       let+ dht = Dht.make_details ~transport addr eps in
       OUnit2.assert_equal ~ctxt ~printer:Address.to_string pred
-        (Dht.predecessor dht) ;
+        (Dht.predecessor dht);
       dht
     in
     let dht_a = make_dht (transport_a, 10, 0)
     and dht_b = make_dht (transport_b, 20, if order then 10 else 0) in
     let* qa = Lwt.map Result.return (Lwt_utils.RPC.receive transport_a.query)
-    and* qb =
-      Lwt.map Result.return (Lwt_utils.RPC.receive transport_b.query)
-    in
+    and* qb = Lwt.map Result.return (Lwt_utils.RPC.receive transport_b.query) in
     let check_query s p = function
-      | ChordMessages.Hello {self; predecessor} ->
+      | ChordMessages.Hello { self; predecessor } ->
           let printer = Address.to_string in
-          OUnit2.assert_equal ~ctxt ~printer s self.address ;
+          OUnit2.assert_equal ~ctxt ~printer s self.address;
           OUnit2.assert_equal ~ctxt ~printer p predecessor
-      | _ ->
-          OUnit2.assert_string "wrong query"
+      | _ -> OUnit2.assert_string "wrong query"
     in
-    check_query 10 0 qa ;
-    check_query 20 0 qb ;
+    check_query 10 0 qa;
+    check_query 20 0 qb;
     let transport_a, dht_a, exp_a, transport_b, dht_b, exp_b =
       if order then (transport_a, dht_a, 0, transport_b, dht_b, 10)
       else (transport_b, dht_b, 10, transport_a, dht_a, 0)
@@ -202,8 +201,8 @@ let chord_join_race order ctxt =
     let open Lwt_utils.O_result in
     let* dht_b = dht_b in
     let printer = Address.to_string in
-    OUnit2.assert_equal ~ctxt ~printer exp_a (Dht.predecessor dht_a) ;
-    OUnit2.assert_equal ~ctxt ~printer exp_b (Dht.predecessor dht_b) ;
+    OUnit2.assert_equal ~ctxt ~printer exp_a (Dht.predecessor dht_a);
+    OUnit2.assert_equal ~ctxt ~printer exp_b (Dht.predecessor dht_b);
     Lwt_result.return ()
   in
   Result.ok_or_failwith (Lwt_main.run main)
@@ -215,13 +214,49 @@ let assert_greater ?ctxt ?(cmp = fun a b -> a > b) ?printer ?pp_diff ?msg a b =
   in
   OUnit2.assert_equal ?ctxt ~cmp ?printer ?pp_diff ?msg a b
 
+let assert_less ?ctxt ?(cmp = fun a b -> a < b) ?printer ?pp_diff ?msg a b =
+  let printer =
+    let f printer v = if v = a then "at least " ^ printer v else printer v in
+    Option.map printer ~f
+  in
+  OUnit2.assert_equal ?ctxt ~cmp ?printer ?pp_diff ?msg a b
+
+let chord_fix_index_overshoot ctxt =
+  let count = ref 0 in
+  let make_details =
+    let filter _ = function
+      | ChordMessages.Successor _ ->
+          count := !count + 1;
+          false
+      | _ -> false
+    in
+    let transport = Transport.make_details filter in
+    Dht.make_details ~transport
+  in
+  let main =
+    let printer = string_of_int in
+    (* Setup so dht_0 wrongfully thinks dht_2 is its successor. *)
+    let* dht_0 = make_details 0 [] in
+    let* dht_2 = make_details 2 [ Dht.endpoint dht_0 ] in
+    let* dht_1 = make_details 1 [ Dht.endpoint dht_2 ] in
+    let* () = Dht.set dht_1 1 (Bytes.of_string "") in
+    let before = !count in
+    let* _ = Dht.get dht_0 1 in
+    (* The first run must fix the finger table. *)
+    assert_less ~ctxt ~printer (before + 1) !count;
+    let before = !count in
+    let* _ = Dht.get dht_0 1 in
+    (* The second run must find the value in one hop. *)
+    OUnit2.assert_equal ~ctxt ~printer (before + 1) !count;
+    Lwt_result.return ()
+  in
+  Result.ok_or_failwith (Lwt_main.run main)
+
 let chord_complexity ctxt =
   let main =
     let rec enumerate acc = function
-      | 0 ->
-          0 :: acc
-      | n ->
-          enumerate (n :: acc) (n - 1)
+      | 0 -> 0 :: acc
+      | n -> enumerate (n :: acc) (n - 1)
     in
     let addresses = enumerate [] ((Address.space - 1) / 10) in
     let count = ref 0 in
@@ -229,29 +264,38 @@ let chord_complexity ctxt =
       Lwt_utils.List.fold_map addresses ~init:[] ~f:(fun endpoints address ->
           let filter _ = function
             | ChordMessages.Successor _ ->
-                count := !count + 1 ;
+                count := !count + 1;
                 false
-            | _ ->
-                false
+            | _ -> false
           in
           let transport = Transport.make_details filter in
           let* dht = Dht.make_details ~transport address endpoints in
           Lwt_result.return (Dht.endpoint dht :: endpoints, dht))
     in
-    ignore endpoints ;
-    ignore dhts ;
-    assert_greater ~ctxt ~printer:string_of_int 50 !count ;
+    ignore endpoints;
+    ignore dhts;
+    assert_greater ~ctxt ~printer:string_of_int 50 !count;
     Lwt_result.return ()
   in
   Result.ok_or_failwith (Lwt_main.run main)
 
 let suite =
   "DHT"
-  >::: [ "generic" >::: ["join" >:: generic_join; "single" >:: generic_single]
-       ; "chord"
-         >::: [ "join"
-                >::: [ "wrong_predecessor" >:: chord_join_race true
-                     ; "wrong_successor" >:: chord_join_race false ]
-              ; "lookup" >::: ["complexity" >:: chord_complexity] ] ]
+  >::: [
+         "generic" >::: [ "join" >:: generic_join; "single" >:: generic_single ];
+         "chord"
+         >::: [
+                "join"
+                >::: [
+                       "wrong_predecessor" >:: chord_join_race true;
+                       "wrong_successor" >:: chord_join_race false;
+                     ];
+                "lookup"
+                >::: [
+                       "index_overshot" >:: chord_fix_index_overshoot;
+                       "complexity" >:: chord_complexity;
+                     ];
+              ];
+       ]
 
 let () = run_test_tt_main suite
