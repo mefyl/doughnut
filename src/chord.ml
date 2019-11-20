@@ -331,20 +331,18 @@ struct
     let server = Transport.listen transport () in
     let open Lwt_utils.O_result in
     let* successor, predecessor =
-      match
-        Core.List.find_map
-          ~f:(fun endpoint ->
-            Option.some
-              (successor_query transport
-                 {
-                   address;
-                   predecessor = { address = Address.null; endpoint };
-                   finger = Stdlib.Array.make 0 None;
-                   values = Map.empty;
-                 }
-                 address endpoint))
-          endpoints
-      with
+      let f endpoint =
+        Option.some
+          (successor_query transport
+             {
+               address;
+               predecessor = { address = Address.null; endpoint };
+               finger = Stdlib.Array.make 0 None;
+               values = Map.empty;
+             }
+             address endpoint)
+      in
+      match Core.List.find_map ~f endpoints with
       | None ->
           Logs.warn (fun m ->
               m "node(%a): could not find predecessor" Address.pp address);
