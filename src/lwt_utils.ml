@@ -21,10 +21,8 @@ module O_result = struct
 
   let ( and* ) l r =
     let both = function
-      | Result.Ok l, Result.Ok r ->
-          Result.Ok (l, r)
-      | (Result.Error _ as e), _ | _, (Result.Error _ as e) ->
-          e
+      | Result.Ok l, Result.Ok r -> Result.Ok (l, r)
+      | (Result.Error _ as e), _ | _, (Result.Error _ as e) -> e
     in
     Lwt.bind l (fun l -> Lwt.bind r (fun r -> Lwt.return (both (l, r))))
 end
@@ -35,8 +33,7 @@ module List = struct
 
   let rec fold_map l ~init ~f =
     match l with
-    | [] ->
-        Lwt_result.return (init, [])
+    | [] -> Lwt_result.return (init, [])
     | h :: t ->
         let* init, v = f init h in
         let+ res, t = fold_map t ~init ~f in
@@ -44,24 +41,25 @@ module List = struct
 end
 
 module RPC = struct
-  type ('a, 'b) t =
-    { send_stream: 'a Lwt_stream.t
-    ; send: 'a option -> unit
-    ; receive_stream: 'b Lwt_stream.t
-    ; receive: 'b option -> unit }
+  type ('a, 'b) t = {
+    send_stream : 'a Lwt_stream.t;
+    send : 'a option -> unit;
+    receive_stream : 'b Lwt_stream.t;
+    receive : 'b option -> unit;
+  }
 
   let make () =
     let send_stream, send = Lwt_stream.create ()
     and receive_stream, receive = Lwt_stream.create () in
-    {send_stream; send; receive_stream; receive}
+    { send_stream; send; receive_stream; receive }
 
-  let send {send; receive_stream; _} m =
-    send (Some m) ;
+  let send { send; receive_stream; _ } m =
+    send (Some m);
     Lwt_stream.next receive_stream
 
-  let receive {send_stream; _} = Lwt_stream.next send_stream
+  let receive { send_stream; _ } = Lwt_stream.next send_stream
 
-  let respond {receive; _} r =
+  let respond { receive; _ } r =
     (* FIXME: sync ? *)
     Lwt.return (receive (Some r))
 end

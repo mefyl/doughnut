@@ -84,10 +84,10 @@ module type Transport = sig
   val endpoint : t -> server -> endpoint
 
   val send :
-       t
-    -> client
-    -> MessagesType.query Messages.message
-    -> (MessagesType.response Messages.message, string) Lwt_result.t
+    t ->
+    client ->
+    MessagesType.query Messages.message ->
+    (MessagesType.response Messages.message, string) Lwt_result.t
 
   val receive : t -> server -> (id * MessagesType.query Messages.message) Lwt.t
 
