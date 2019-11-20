@@ -356,26 +356,17 @@ struct
                 Messages.pp_peer successor);
           (Some successor, predecessor)
     in
-    let initial_state =
-      let size = Address.space_log in
-      let finger = Stdlib.Array.make size None in
-      Stdlib.Array.set finger (size - 1) successor;
-      let self : Messages.peer =
-        { address; endpoint = Transport.endpoint transport server }
+    let res =
+      let state =
+        let self : Messages.peer =
+          { address; endpoint = Transport.endpoint transport server }
+        in
+        let predecessor = Core.Option.value predecessor ~default:self in
+        let finger = Stdlib.Array.make Address.space_log successor in
+        { address; predecessor; finger; values = Map.empty }
       in
-      let predecessor = Core.Option.value predecessor ~default:self in
-      let finger = Stdlib.Array.make Address.space_log None in
-      { address; predecessor; finger; values = Map.empty }
+      { server; state; transport }
     in
-    let initial_state =
-      let finger =
-        Option.value ~default:initial_state.finger
-          (Option.map successor ~f:(fun n ->
-               finger_add initial_state initial_state.finger n))
-      in
-      { initial_state with finger }
-    in
-    let res = { server; state = initial_state; transport } in
     Logs.debug (fun m ->
         m "node(%a): precedessor: %a" Address.pp address Messages.pp_peer
           res.state.predecessor);
