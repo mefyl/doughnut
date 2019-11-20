@@ -266,8 +266,8 @@ struct
         let+ succ = successor_query transport state addr endpoint in
         Some succ
 
-  let finger_add state finger ({ Messages.address; _ } as peer) =
-    let finger = Stdlib.Array.copy finger in
+  let finger_add state ({ Messages.address; _ } as peer) =
+    let finger = Stdlib.Array.copy state.finger in
     let rec fill n =
       let index = Address.space_log - n - 1
       and pivot =
@@ -404,7 +404,7 @@ struct
                 {
                   res.state with
                   predecessor = self;
-                  finger = finger_add res.state res.state.finger self;
+                  finger = finger_add res.state self;
                 } ) )
             else (
               Logs.debug (fun m ->
@@ -445,10 +445,7 @@ struct
                     (Option.pp Messages.pp_peer)
                     current)
             in
-            {
-              res.state with
-              finger = finger_add res.state res.state.finger actual;
-            }
+            { res.state with finger = finger_add res.state actual }
       in
       let* info = Transport.learn transport server in
       learn info
