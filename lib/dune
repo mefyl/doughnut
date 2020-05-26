@@ -1,3 +1,5 @@
+(include_subdirs unqualified)
+
 (library
  (name doughnut)
  (public_name doughnut)
