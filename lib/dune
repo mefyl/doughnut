@@ -3,5 +3,4 @@
 (library
  (name doughnut)
  (public_name doughnut)
- (modules_without_implementation implementation)
  (libraries base logs logs.lwt lwt threads.posix))

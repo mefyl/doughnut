@@ -1,6 +1,6 @@
 open Base
 
-module type Implementation = sig
+module type S = sig
   module Address : Address.S
 
   type node
@@ -10,8 +10,4 @@ module type Implementation = sig
   val make : Address.t -> endpoint list -> (node, string) Lwt_result.t
 
   val endpoint : node -> endpoint
-
-  val set : node -> Address.t -> Bytes.t -> (unit, string) Lwt_result.t
-
-  val get : node -> Address.t -> (Bytes.t, string) Lwt_result.t
 end
