@@ -50,12 +50,13 @@ module Address : Doughnut.Address.S with type t = int = struct
   end
 end
 
-module ChordMessages =
-  Doughnut.Chord.Messages (Address) (Doughnut.Transport.Direct)
+module Wire = Doughnut.Transport.Direct ()
+
+module ChordMessages = Doughnut.Chord.Messages (Address) (Wire)
 open Doughnut.Transport.MessagesType
 
 module Transport = struct
-  include Doughnut.Transport.Make (Doughnut.Transport.Direct) (ChordMessages)
+  include Doughnut.Transport.Make (Wire) (ChordMessages)
 
   type filter =
     | Passthrough
@@ -108,8 +109,7 @@ module Transport = struct
   let learn t = learn t.wrapped
 end
 
-module Dht =
-  Doughnut.Chord.MakeDetails (Address) (Doughnut.Transport.Direct) (Transport)
+module Dht = Doughnut.Chord.MakeDetails (Address) (Wire) (Transport)
 
 let () =
   Logs.set_level (Some Logs.Debug);

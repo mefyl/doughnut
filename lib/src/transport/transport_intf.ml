@@ -29,13 +29,13 @@ module type Wire = sig
 
   type endpoint
 
+  type t
+
   val pp_endpoint : Formatter.t -> endpoint -> unit
 
   val sexp_of_endpoint : endpoint -> Sexp.t
 
   val endpoint_of_sexp : Sexp.t -> (endpoint, string) Result.t
-
-  type t
 
   val make : unit -> t
 
