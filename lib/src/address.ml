@@ -1,27 +1,36 @@
 open Base
 
+(** Block and node addresses.
+
+    Every block and node is attributed a unique address. The size of the address
+    space, ie the number of possible different addresses, must be a power of 2. *)
 module type S = sig
+  (** An address *)
   type t
 
+  (** Global ordering over adresses *)
   val compare : t -> t -> int
 
-  val sexp_of : t -> Sexp.t
-
-  val of_sexp : Sexp.t -> (t, string) Result.t
-
-  val random : unit -> t
-
-  val space : int
-
-  val space_log : int
-
+  (** A special, null address *)
   val null : t
 
+  (** Log2 of the address space size. *)
+  val space_log : int
+
+  (** [log n] is the address it possition [2 ** n]. *)
   val log : int -> t
 
-  val pp : Formatter.t -> t -> unit
-
+  (** String representation *)
   val to_string : t -> string
+
+  (** Sexp conversion *)
+  val sexp_of : t -> Sexp.t
+
+  (** Sexp conversion *)
+  val of_sexp : Sexp.t -> (t, string) Result.t
+
+  (** Pretty print *)
+  val pp : Formatter.t -> t -> unit
 
   module O : sig
     val ( = ) : t -> t -> bool

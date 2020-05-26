@@ -18,10 +18,6 @@ module Address : Doughnut.Address.S with type t = int = struct
       with Failure _ -> Result.Error ("invalid integer address: " ^ s) )
     | sexp -> Result.Error (Format.asprintf "invalid address: %a" Sexp.pp sexp)
 
-  let random () = Random.int 255
-
-  let space = 256
-
   let space_log = 8
 
   let null = 0
@@ -293,7 +289,7 @@ let chord_complexity ctxt =
       | 0 -> 0 :: acc
       | n -> enumerate (n :: acc) (n - 1)
     in
-    let addresses = enumerate [] ((Address.space - 1) / 10) in
+    let addresses = enumerate [] (((2 ** Address.space_log) - 1) / 10) in
     let count = ref 0 in
     let* endpoints, dhts =
       let module List = List_monadic.Make2 (Lwt_result) in
