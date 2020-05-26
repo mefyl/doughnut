@@ -12,7 +12,7 @@ module Result_o = struct
         Result.bind b ~f:(fun b -> Result.Ok (a, b)))
 end
 
-module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
+module Messages (A : Address.S) (Wire : Transport.Wire) = struct
   module Address = A
   module Wire = Wire
 
@@ -143,7 +143,7 @@ module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
 end
 
 module MakeDetails
-    (A : Implementation.Address)
+    (A : Address.S)
     (W : Transport.Wire)
     (T : Transport.Transport
            with module Wire = W

@@ -4,7 +4,7 @@ open Lwt_utils.O_result
 
 module Format = Caml.Format
 
-module Address : Doughnut.Implementation.Address with type t = int = struct
+module Address : Doughnut.Address.S with type t = int = struct
   type t = int
 
   let compare = Stdlib.compare
