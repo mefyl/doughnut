@@ -1,4 +1,4 @@
-open Core
+open Base
 
 module type Address = sig
   type t
@@ -19,7 +19,7 @@ module type Address = sig
 
   val log : int -> t
 
-  val pp : Format.formatter -> t -> unit
+  val pp : Formatter.t -> t -> unit
 
   val to_string : t -> string
 

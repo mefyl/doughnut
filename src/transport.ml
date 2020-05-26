@@ -1,6 +1,8 @@
-open Core
-open Sexplib
+open Base
+
 include Transport_intf
+
+module Format = Caml.Format
 
 module Direct = struct
   type server =
@@ -22,11 +24,11 @@ module Direct = struct
 
   let sexp_of_endpoint ((id, _, _) as ep) =
     map := Map.add id ep !map;
-    Sexp.Atom (string_of_int id)
+    Sexp.Atom (Int.to_string id)
 
   let endpoint_of_sexp = function
     | Sexp.Atom s -> (
-        match int_of_string_opt s with
+        match Caml.int_of_string_opt s with
         | Some id -> (
             match Map.find_opt id !map with
             | Some v -> Result.Ok v

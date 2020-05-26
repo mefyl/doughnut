@@ -1,4 +1,6 @@
-include Core.Option
+include Base.Option
+
+module Format = Caml.Format
 
 let pp f fmt = function
   | None -> Format.pp_print_string fmt "none"

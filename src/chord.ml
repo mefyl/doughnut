@@ -1,13 +1,15 @@
-module Sexp = Core.Sexp
+open Base
+
+module Format = Caml.Format
 
 module Result_o = struct
-  let ( let* ) = Core.Result.( >>= )
+  let ( let* ) = Result.( >>= )
 
-  let ( let+ ) = Core.Result.( >>| )
+  let ( let+ ) = Result.( >>| )
 
   let ( and+ ) a b =
-    Core.Result.bind a ~f:(fun a ->
-        Core.Result.bind b ~f:(fun b -> Core.Result.Ok (a, b)))
+    Result.bind a ~f:(fun a ->
+        Result.bind b ~f:(fun b -> Result.Ok (a, b)))
 end
 
 module Messages (A : Implementation.Address) (Wire : Transport.Wire) = struct
@@ -198,9 +200,9 @@ struct
             let open Address.O in
             peer.address - state.address < addr - state.address
       in
-      match Core.Array.findi ~f state.finger with
+      match Array.findi ~f state.finger with
       | Some (_, lookup) ->
-          let res = Core.Option.value_exn lookup in
+          let res = Option.value_exn lookup in
           Logs.debug (fun m ->
               m "%a: finger response for %a: %a" pp_node state Address.pp addr
                 Messages.pp_peer res);
@@ -342,7 +344,7 @@ struct
              }
              address endpoint)
       in
-      match Core.List.find_map ~f endpoints with
+      match List.find_map ~f endpoints with
       | None ->
           Logs.warn (fun m ->
               m "node(%a): could not find predecessor" Address.pp address);
@@ -359,7 +361,7 @@ struct
         let self : Messages.peer =
           { address; endpoint = Transport.endpoint transport server }
         in
-        let predecessor = Core.Option.value predecessor ~default:self in
+        let predecessor = Option.value predecessor ~default:self in
         let finger = Stdlib.Array.make Address.space_log successor in
         { address; predecessor; finger; values = Map.empty }
       in
@@ -391,6 +393,7 @@ struct
                 m "%a: query: hello %a (%a)" pp_node res.state Address.pp
                   self.address Address.pp predecessor);
             if
+              let open Address.O in
               between self.address res.state.predecessor.address
                 res.state.address
               && predecessor = res.state.predecessor.address
@@ -440,7 +443,7 @@ struct
               Logs_lwt.debug (fun m ->
                   m "%a: fix finger for %a with %a (was %a)" pp_node res.state
                     Address.pp address Messages.pp_peer actual
-                    (Option.pp Messages.pp_peer)
+                    (Opt.pp Messages.pp_peer)
                     current)
             in
             { res.state with finger = finger_add res.state actual }
@@ -457,7 +460,7 @@ struct
         (fun e ->
           Logs.err (fun m ->
               m "node(%a): fatal error in message thread: %a" Address.pp address
-                Core.Exn.pp e);
+                Exn.pp e);
           safe_recurse f)
     in
     let hello (peer : Messages.peer) =
@@ -478,7 +481,7 @@ struct
       | _ -> Lwt_result.fail "unexpected answer"
     in
     let* joined =
-      match Core.Option.map successor ~f:hello with
+      match Option.map successor ~f:hello with
       | Some v -> v
       | _ -> Lwt_result.return true
     in

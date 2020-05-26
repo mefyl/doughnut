@@ -1,17 +1,19 @@
-open Core
-module Lwt_utils = Dht.Lwt_utils
+open Base
+module Lwt_utils = Doughnut.Lwt_utils
 open Lwt_utils.O_result
 
-module Address : Dht.Implementation.Address with type t = int = struct
+module Format = Caml.Format
+
+module Address : Doughnut.Implementation.Address with type t = int = struct
   type t = int
 
   let compare = Stdlib.compare
 
-  let sexp_of i = Sexp.Atom (string_of_int i)
+  let sexp_of i = Sexp.Atom (Int.to_string i)
 
   let of_sexp = function
     | Sexp.Atom s -> (
-        try Result.Ok (int_of_string s)
+        try Result.Ok (Int.of_string s)
         with Failure _ -> Result.Error ("invalid integer address: " ^ s) )
     | sexp -> Result.Error (Format.asprintf "invalid address: %a" Sexp.pp sexp)
 
@@ -28,7 +30,7 @@ module Address : Dht.Implementation.Address with type t = int = struct
 
   let pp fmt addr = Format.pp_print_int fmt addr
 
-  let to_string = string_of_int
+  let to_string = Int.to_string
 
   module O = struct
     let ( = ) = Stdlib.( = )
@@ -37,19 +39,19 @@ module Address : Dht.Implementation.Address with type t = int = struct
 
     let ( <= ) = Stdlib.( <= )
 
-    let ( + ) l r = (l + r) mod 256
+    let ( + ) l r = (l + r) % 256
 
     let ( - ) l r =
-      let res = (l - r) mod 256 in
+      let res = (l - r) % 256 in
       if res < 0 then res + 256 else res
   end
 end
 
-module ChordMessages = Dht.Chord.Messages (Address) (Dht.Transport.Direct)
-open Dht.Transport.MessagesType
+module ChordMessages = Doughnut.Chord.Messages (Address) (Doughnut.Transport.Direct)
+open Doughnut.Transport.MessagesType
 
 module Transport = struct
-  include Dht.Transport.Make (Dht.Transport.Direct) (ChordMessages)
+  include Doughnut.Transport.Make (Doughnut.Transport.Direct) (ChordMessages)
 
   type filter = Passthrough | Response of response ChordMessages.message
 
@@ -99,7 +101,7 @@ module Transport = struct
   let learn t = learn t.wrapped
 end
 
-module Dht = Dht.Chord.MakeDetails (Address) (Dht.Transport.Direct) (Transport)
+module Dht = Doughnut.Chord.MakeDetails (Address) (Doughnut.Transport.Direct) (Transport)
 
 let () =
   Logs.set_level (Some Logs.Debug);
@@ -234,7 +236,7 @@ let chord_fix_index_overshoot ctxt =
     Dht.make_details ~transport
   in
   let main =
-    let printer = string_of_int in
+    let printer = Int.to_string in
     (* Setup so dht_0 wrongfully thinks dht_2 is its successor. *)
     let* dht_0 = make_details 0 [] in
     let* dht_2 = make_details 2 [ Dht.endpoint dht_0 ] in
@@ -274,7 +276,7 @@ let chord_complexity ctxt =
     in
     ignore endpoints;
     ignore dhts;
-    assert_greater ~ctxt ~printer:string_of_int 50 !count;
+    assert_greater ~ctxt ~printer:Int.to_string 50 !count;
     Lwt_result.return ()
   in
   Result.ok_or_failwith (Lwt_main.run main)

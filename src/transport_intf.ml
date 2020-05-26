@@ -1,4 +1,4 @@
-open Core
+open Base
 
 module MessagesType = struct
   type query = Query
@@ -29,7 +29,7 @@ module type Wire = sig
 
   type endpoint
 
-  val pp_endpoint : Format.formatter -> endpoint -> unit
+  val pp_endpoint : Formatter.t -> endpoint -> unit
 
   val sexp_of_endpoint : endpoint -> Sexp.t
 

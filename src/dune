@@ -1,5 +1,5 @@
 (library
- (name dht)
- (public_name dht)
+ (name doughnut)
+ (public_name doughnut)
  (modules_without_implementation implementation)
- (libraries core logs logs.lwt lwt threads.posix))
+ (libraries base logs logs.lwt lwt threads.posix))
