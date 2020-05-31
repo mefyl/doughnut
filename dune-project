@@ -22,6 +22,8 @@
     :with-test))
   (base
    (>= v0.13.2))
+  (csexp
+   (>= 1.2.0))
   (logs
    (>= 0.7.0))
   (lwt

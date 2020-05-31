@@ -1,6 +1,6 @@
 open Base
 
-module MessagesType = struct
+module MessageType = struct
   type query = Query
 
   type response = Response
@@ -8,66 +8,76 @@ module MessagesType = struct
   type info = Info
 end
 
-module type Messages = sig
-  type 'a message
+module type Message = sig
+  type 'a t
 
-  open MessagesType
+  open MessageType
 
-  val sexp_of_message : 'a message -> Sexp.t
+  val sexp_of_message : 'a t -> Sexp.t
 
-  val query_of_sexp : Sexp.t -> (query message, string) Result.t
+  val query_of_sexp : Sexp.t -> (query t, string) Result.t
 
-  val response_of_sexp : Sexp.t -> (response message, string) Result.t
+  val response_of_sexp : Sexp.t -> (response t, string) Result.t
 
-  val info_of_sexp : Sexp.t -> (info message, string) Result.t
+  val info_of_sexp : Sexp.t -> (info t, string) Result.t
 end
 
 module type Wire = sig
-  type client
-
-  type server
-
-  type endpoint
-
   type t
 
-  val pp_endpoint : Formatter.t -> endpoint -> unit
+  type client
 
-  val sexp_of_endpoint : endpoint -> Sexp.t
+  type 'state server
 
-  val endpoint_of_sexp : Sexp.t -> (endpoint, string) Result.t
+  module Endpoint : sig
+    type t
+
+    val pp : Formatter.t -> t -> unit
+
+    val to_sexp : t -> Sexp.t
+
+    val of_sexp : Sexp.t -> (t, string) Result.t
+
+    val compare : t -> t -> int
+  end
 
   val make : unit -> t
 
-  val connect : t -> endpoint -> client
+  val connect : t -> Endpoint.t -> (client, string) Lwt_result.t
 
-  val listen : t -> unit -> server
+  val serve :
+    init:(Endpoint.t -> ('state, string) Lwt_result.t) ->
+    respond:('state -> Sexp.t -> (Sexp.t * 'state, string) Lwt_result.t) ->
+    learn:('state -> Sexp.t -> ('state, string) Lwt_result.t) ->
+    t ->
+    ('state server, string) Lwt_result.t
 
-  val endpoint : t -> server -> endpoint
+  val endpoint : t -> _ server -> Endpoint.t
 
   type id
 
-  val send : t -> client -> Sexp.t -> Sexp.t Lwt.t
+  val send : t -> client -> Sexp.t -> (Sexp.t, string) Lwt_result.t
 
-  val receive : t -> server -> (id * Sexp.t) Lwt.t
+  val inform : t -> client -> Sexp.t -> (unit, string) Lwt_result.t
 
-  val respond : t -> server -> id -> Sexp.t -> unit Lwt.t
-
-  val inform : t -> client -> Sexp.t -> unit
-
-  val learn : t -> server -> Sexp.t Lwt.t
+  val state :
+    'state server ->
+    ('state -> ('state * 'result, string) Lwt_result.t) ->
+    ('result, string) Lwt_result.t
 end
 
 module type Transport = sig
-  module Messages : Messages
+  open MessageType
+
+  module Message : Message
 
   module Wire : Wire
 
-  type server = Wire.server
+  type 'state server
 
   type client = Wire.client
 
-  type endpoint = Wire.endpoint
+  type endpoint = Wire.Endpoint.t
 
   type id = Wire.id
 
@@ -77,24 +87,27 @@ module type Transport = sig
 
   val make : unit -> t
 
-  val connect : t -> endpoint -> client
+  val connect : t -> endpoint -> (client, string) Lwt_result.t
 
-  val listen : t -> unit -> server
+  val serve :
+    init:(endpoint -> ('state, string) Lwt_result.t) ->
+    respond:
+      ('state ->
+      query Message.t ->
+      (response Message.t * 'state, string) Lwt_result.t) ->
+    learn:('state -> info Message.t -> ('state, string) Lwt_result.t) ->
+    t ->
+    ('state server, string) Lwt_result.t
 
-  val endpoint : t -> server -> endpoint
+  val state :
+    'state server ->
+    ('state -> ('state * 'result, string) Lwt_result.t) ->
+    ('result, string) Lwt_result.t
+
+  val endpoint : t -> _ server -> endpoint
 
   val send :
-    t ->
-    client ->
-    MessagesType.query Messages.message ->
-    (MessagesType.response Messages.message, string) Lwt_result.t
+    t -> client -> query Message.t -> (response Message.t, string) Lwt_result.t
 
-  val receive : t -> server -> (id * MessagesType.query Messages.message) Lwt.t
-
-  val respond :
-    t -> server -> id -> MessagesType.response Messages.message -> unit Lwt.t
-
-  val inform : t -> client -> MessagesType.info Messages.message -> unit
-
-  val learn : t -> server -> MessagesType.info Messages.message Lwt.t
+  val inform : t -> client -> info Message.t -> (unit, string) Lwt_result.t
 end

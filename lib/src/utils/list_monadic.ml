@@ -15,6 +15,14 @@ module Make2 (Monad : Base.Monad.S2) = struct
       let* init, v = f init h in
       let+ res, t = fold_map t ~init ~f in
       (res, v :: t)
+
+  let rec iter l ~f =
+    let open Let.Syntax2 (Monad) in
+    match l with
+    | [] -> Monad.return ()
+    | h :: t ->
+      let* () = f h in
+      iter t ~f
 end
 
 module Make (Monad : Base.Monad.S) = struct

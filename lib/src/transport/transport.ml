@@ -1,43 +1,36 @@
 open Utils
 include Transport_intf
 
-module Make (W : Wire) (M : Messages) = struct
-  module Messages = M
+open Let.Syntax2 (Lwt_result)
+
+module Make (W : Wire) (M : Message) = struct
+  module Message = M
   module Wire = W
   include Wire
+
+  type endpoint = Wire.Endpoint.t
 
   let wire x = x
 
   let send t client query =
-    let open Let.Syntax (Lwt) in
-    let+ response =
-      Wire.send (wire t) client (Messages.sexp_of_message query)
-    in
-    Messages.response_of_sexp response
-
-  let rec receive t server =
-    let open Let.Syntax (Lwt) in
-    let* id, query = Wire.receive (wire t) server in
-    match Messages.query_of_sexp query with
-    | Result.Ok query -> Lwt.return (id, query)
-    | Result.Error s ->
-      let* () = Logs_lwt.warn (fun m -> m "error receiving query: %s" s) in
-      receive (wire t) server
-
-  let respond t server id response =
-    Wire.respond (wire t) server id (Messages.sexp_of_message response)
+    let* response = Wire.send (wire t) client (Message.sexp_of_message query) in
+    Lwt.return @@ Message.response_of_sexp response
 
   let inform t client info =
-    Wire.inform (wire t) client (Messages.sexp_of_message info)
+    Wire.inform (wire t) client (Message.sexp_of_message info)
 
-  let rec learn t server =
-    let open Let.Syntax (Lwt) in
-    let* info = Wire.learn (wire t) server in
-    match Messages.info_of_sexp info with
-    | Result.Ok info -> Lwt.return info
-    | Result.Error s ->
-      let* () = Logs_lwt.warn (fun m -> m "error receiving info: %s" s) in
-      learn (wire t) server
+  let serve ~init ~respond ~learn t =
+    let respond state sexp =
+      let* query = Message.query_of_sexp sexp |> Lwt.return in
+      let+ response, state = respond state query in
+      (Message.sexp_of_message response, state)
+    and learn state sexp =
+      let* info = Message.info_of_sexp sexp |> Lwt.return in
+      learn state info
+    in
+    Wire.serve ~init ~respond ~learn (wire t)
+
+  let state server f = Wire.state server f
 end
 
 module Direct () = Direct.Make ()

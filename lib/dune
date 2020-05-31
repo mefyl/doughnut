@@ -3,4 +3,4 @@
 (library
  (name doughnut)
  (public_name doughnut)
- (libraries base logs logs.lwt lwt threads.posix))
+ (libraries base csexp fmt logs logs.lwt lwt lwt.unix threads.posix))

@@ -1,3 +1,3 @@
 (test
  (name main)
- (libraries doughnut logs logs.threaded lwt.unix oUnit))
+ (libraries alcotest alcotest-lwt doughnut logs logs.threaded lwt.unix))

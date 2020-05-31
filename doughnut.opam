@@ -10,6 +10,7 @@ depends: [
   "dune" {>= "2.5"}
   "alcotest" {>= "1.1.0" & with-test}
   "base" {>= "v0.13.2"}
+  "csexp" {>= "1.2.0"}
   "logs" {>= "0.7.0"}
   "lwt" {>= "5.3.0"}
   "ocamlformat" {= "0.14.2" & dev}
