@@ -34,3 +34,5 @@ module Make (W : Wire) (M : Message) = struct
 end
 
 module Direct () = Direct.Make ()
+
+module Tcp = Tcp
