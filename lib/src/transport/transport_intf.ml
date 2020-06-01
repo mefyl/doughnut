@@ -47,7 +47,7 @@ module type Wire = sig
 
   val serve :
     init:(Endpoint.t -> ('state, string) Lwt_result.t) ->
-    respond:('state -> Sexp.t -> (Sexp.t * 'state, string) Lwt_result.t) ->
+    respond:('state -> Sexp.t -> ('state * Sexp.t, string) Lwt_result.t) ->
     learn:('state -> Sexp.t -> ('state, string) Lwt_result.t) ->
     t ->
     ('state server, string) Lwt_result.t
@@ -94,7 +94,7 @@ module type Transport = sig
     respond:
       ('state ->
       query Message.t ->
-      (response Message.t * 'state, string) Lwt_result.t) ->
+      ('state * response Message.t, string) Lwt_result.t) ->
     learn:('state -> info Message.t -> ('state, string) Lwt_result.t) ->
     t ->
     ('state server, string) Lwt_result.t

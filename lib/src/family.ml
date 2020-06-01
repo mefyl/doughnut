@@ -98,10 +98,10 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
     and respond state = function
       | Message.Join peer ->
         Lwt_result.return
-          ( Message.Listed (Set.to_list state.peers),
-            { peers = Set.add state.peers peer } )
+          ( { peers = Set.add state.peers peer },
+            Message.Listed (Set.to_list state.peers) )
       | List ->
-        Lwt_result.return (Message.Listed (Set.to_list state.peers), state)
+        Lwt_result.return (state, Message.Listed (Set.to_list state.peers))
     and learn state = function
       | _ -> Lwt_result.return state
     in

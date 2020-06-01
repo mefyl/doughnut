@@ -22,8 +22,8 @@ module Make (W : Wire) (M : Message) = struct
   let serve ~init ~respond ~learn t =
     let respond state sexp =
       let* query = Message.query_of_sexp sexp |> Lwt.return in
-      let+ response, state = respond state query in
-      (Message.sexp_of_message response, state)
+      let+ state, response = respond state query in
+      (state, Message.sexp_of_message response)
     and learn state sexp =
       let* info = Message.info_of_sexp sexp |> Lwt.return in
       learn state info

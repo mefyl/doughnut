@@ -93,7 +93,7 @@ module Make () = struct
         Lwt.choose [ query; info; action ] >>= function
         | Query query ->
           let* () = Log.debug (fun m -> m "receive query %a" Sexp.pp query) in
-          let* response, state = respond state query in
+          let* state, response = respond state query in
           let* () = Log.debug (fun m -> m "respond %a" Sexp.pp response) in
           let* () = Rpc.respond server.rpc response |> lwt_ok in
           (loop [@tailcall]) state (read_query ()) info action

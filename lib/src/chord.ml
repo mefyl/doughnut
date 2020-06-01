@@ -498,14 +498,15 @@ struct
         match finger state addr with
         | None ->
           Lwt_result.return
-            ( Message.Found
+            ( state,
+              Message.Found
                 ( { address = state.address; endpoint = state.endpoint },
-                  Some state.predecessor ),
-              state )
+                  Some state.predecessor ) )
         | Some peer ->
           Lwt_result.return
-            ( Message.Forward { forward = peer; predecessor = state.predecessor },
-              state ) )
+            ( state,
+              Message.Forward
+                { forward = peer; predecessor = state.predecessor } ) )
       | Message.Hello { self; predecessor } ->
         let* () =
           Log.debug (fun m ->
@@ -529,14 +530,14 @@ struct
               finger = Finger.add state.finger self;
             }
           in
-          Lwt_result.return (Message.Welcome, state)
+          Lwt_result.return (state, Message.Welcome)
         else
           let* () =
             Log.debug (fun m ->
                 m "%a: unrelated or wrong predecessor: %a" pp_node state
                   Address.pp self.address)
           in
-          Lwt_result.return (Message.NotTheDroids, state)
+          Lwt_result.return (state, Message.NotTheDroids)
       | Message.Get addr -> (
         match Map.find_opt addr state.values with
         | Some value ->
@@ -544,8 +545,8 @@ struct
             Log.debug (fun m ->
                 m "%a: locally get %a" pp_node state Address.pp addr)
           in
-          Lwt_result.return (Message.Value value, state)
-        | None -> Lwt_result.return (Message.Not_found, state) )
+          Lwt_result.return (state, Message.Value value)
+        | None -> Lwt_result.return (state, Message.Not_found) )
       | Message.Set (key, data) ->
         if own state key then
           let* () =
@@ -553,9 +554,9 @@ struct
                 m "%a: locally set %a" pp_node state Address.pp key)
           in
           let state = { state with values = Map.add key data state.values } in
-          Lwt_result.return (Message.Done, state)
+          Lwt_result.return (state, Message.Done)
         else
-          Lwt_result.return (Message.Not_found, state)
+          Lwt_result.return (state, Message.Not_found)
     and learn state = function
       | Message.Invalidate { address; actual } ->
         (* FIXME: check it's somewhat valid *)

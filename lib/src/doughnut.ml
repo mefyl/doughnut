@@ -8,4 +8,5 @@ module Utils = struct
   module List_monadic = List_monadic
 end
 
+module Mesh = Mesh
 module Chord = Chord
