@@ -118,6 +118,7 @@ let serve ~init ~respond ~learn () =
     let address = Unix.ADDR_INET (Unix.inet_addr_of_string "0.0.0.0", 0) in
     Lwt_unix.bind socket address
   in
+  let () = Lwt_unix.listen socket 64 in
   let endpoint = convert_endpoint @@ Lwt_unix.getsockname socket in
   let open Let.Syntax2 (Lwt_result) in
   let* state = init endpoint in
