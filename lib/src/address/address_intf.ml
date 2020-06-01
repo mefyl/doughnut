@@ -23,6 +23,9 @@ module type S = sig
   (** String representation *)
   val to_string : t -> string
 
+  (** String parsing *)
+  val of_string : string -> (t, string) Result.t
+
   (** Sexp conversion *)
   val sexp_of : t -> Sexp.t
 

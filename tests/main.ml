@@ -10,12 +10,16 @@ module Address : Doughnut.Address.S with type t = int = struct
 
   let compare = Stdlib.compare
 
+  let to_string = Int.to_string
+
+  let of_string s =
+    try Result.Ok (Int.of_string s)
+    with Failure _ -> Result.Error ("invalid integer address: " ^ s)
+
   let sexp_of i = Sexp.Atom (Int.to_string i)
 
   let of_sexp = function
-    | Sexp.Atom s -> (
-      try Result.Ok (Int.of_string s)
-      with Failure _ -> Result.Error ("invalid integer address: " ^ s) )
+    | Sexp.Atom s -> of_string s
     | sexp -> Result.Error (Format.asprintf "invalid address: %a" Sexp.pp sexp)
 
   let space_log = 8
@@ -29,8 +33,6 @@ module Address : Doughnut.Address.S with type t = int = struct
       1 lsl n
 
   let pp fmt addr = Format.pp_print_int fmt addr
-
-  let to_string = Int.to_string
 
   module O = struct
     let ( = ) = Stdlib.( = )
