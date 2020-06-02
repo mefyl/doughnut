@@ -116,9 +116,11 @@ type client = {
 
 let make () = ()
 
-let connect () { Endpoint.addr; port } =
+let connect () ({ Endpoint.addr; port } as ep) =
   let+ input, output =
-    Lwt_io.open_connection (Unix.ADDR_INET (addr, port)) |> lwt_ok
+    try%lwt Lwt_io.open_connection (Unix.ADDR_INET (addr, port)) |> lwt_ok
+    with Unix.Unix_error (Unix.ECONNREFUSED, _, _) ->
+      fail "connection to %a refused" Endpoint.pp ep
   in
   { input; output; rpc_count = 0 }
 
