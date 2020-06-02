@@ -55,17 +55,17 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
         let* peer = Peer.of_sexp ep in
         Result.return (Join peer)
       | Sexp.Atom "list" -> Result.return List
-      | _ -> Result.fail "invalid query"
+      | q -> Result.fail (Fmt.str "invalid query: %a" Sexp.pp q)
 
     let response_of_sexp = function
       | Sexp.List [ Sexp.Atom "list"; Sexp.List peers ] ->
         let module List = List_monadic.Make2 (Result) in
         let+ peers = List.map ~f:Peer.of_sexp peers in
         Listed peers
-      | _ -> Result.fail "invalid response"
+      | r -> Result.fail (Fmt.str "invalid response: %a" Sexp.pp r)
 
     let info_of_sexp = function
-      | _ -> Result.fail "invalid info"
+      | i -> Result.fail (Fmt.str "invalid info: %a" Sexp.pp i)
   end
 
   module Transport = Transport.Make (Wire) (Message)
