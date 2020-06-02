@@ -148,11 +148,12 @@ let serve ~init ~respond ~learn () =
       and output = Lwt_io.of_fd ~mode:Lwt_io.output socket in
       let rec loop () =
         Csexp.Parser.parse input >>= function
-        | Sexp.List [ Sexp.Atom "query"; query ] ->
+        | Sexp.List [ Sexp.Atom "query"; Sexp.List [ Sexp.Atom id; query ] ] ->
           let* response =
             let action state = respond state query in
             State.run state action
           in
+          let response = Sexp.List [ Sexp.Atom id; response ] in
           let* () = Lwt_io.write output @@ Csexp.to_string response |> lwt_ok in
           (loop [@tailcall]) ()
         | Sexp.List [ Sexp.Atom "info"; info ] ->
@@ -187,6 +188,7 @@ let serve ~init ~respond ~learn () =
 let endpoint () { endpoint; _ } = endpoint
 
 let send () client query =
+  let* () = Log.debug (fun m -> m "send query: %a" Sexp.pp query) in
   let read_rpc input =
     Csexp.Parser.parse input >>= function
     | Sexp.List [ Sexp.Atom id; response ] -> (
@@ -197,17 +199,23 @@ let send () client query =
   in
   let rpc_id = client.rpc_count in
   let () = client.rpc_count <- client.rpc_count + 1 in
-  let query = Sexp.List [ Sexp.Atom (Int.to_string rpc_id); query ] in
-  let* () = Log.debug (fun m -> m "send %a" Sexp.pp query) in
+  let query =
+    Sexp.List
+      [
+        Sexp.Atom "query"; Sexp.List [ Sexp.Atom (Int.to_string rpc_id); query ];
+      ]
+  in
   let* () = Lwt_io.write client.output (Csexp.to_string query) |> lwt_ok in
   let* id, response = read_rpc client.input in
   if id = rpc_id then
+    let* () = Log.debug (fun m -> m "receive response: %a" Sexp.pp response) in
     Lwt_result.return response
   else
     fail "wrong response id: %i" id
 
 let inform () client info =
   let* () = Log.debug (fun m -> m "send %a" Sexp.pp info) in
+  let info = Sexp.List [ Sexp.Atom "info"; info ] in
   Lwt_io.write client.output (Csexp.to_string info) |> lwt_ok
 
 let state { state; _ } action = State.run state action
