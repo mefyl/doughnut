@@ -2,8 +2,14 @@ open Utils
 
 let src = Logs.Src.create "doughnut"
 
-let debug m = Logs_lwt.debug m |> Lwt.map ~f:Result.return
+let debug_lwt m = Logs_lwt.debug m
 
-let info m = Logs_lwt.info m |> Lwt.map ~f:Result.return
+let info_lwt m = Logs_lwt.info m
 
-let warn m = Logs_lwt.warn m |> Lwt.map ~f:Result.return
+let warn_lwt m = Logs_lwt.warn m
+
+let debug m = debug_lwt m |> Lwt.map ~f:Result.return
+
+let info m = info_lwt m |> Lwt.map ~f:Result.return
+
+let warn m = warn_lwt m |> Lwt.map ~f:Result.return

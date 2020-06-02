@@ -81,20 +81,37 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
   open Let.Syntax2 (Lwt_result)
 
   let make address endpoints =
+    let* () = Log.debug (fun m -> m "family(%a): make" Address.pp address) in
     let transport = Transport.make () in
     let init endpoint =
-      let f peer =
-        let* peer = Transport.connect transport peer in
-        Transport.send transport peer (Message.Join (address, endpoint))
-        >>= function
-        | Listed peers -> Lwt_result.return peers
+      let* () =
+        Log.debug (fun m ->
+            m "family(%a): listening on %a" Address.pp address
+              Transport.Wire.Endpoint.pp endpoint)
       in
-      let open Let.Syntax (Lwt) in
-      let* peers = Lwt_list.map_p f endpoints in
-      let open Let.Syntax2 (Result) in
-      Lwt.return
-      @@ let* peers = Result.all peers in
-         Result.return { peers = Set.of_list (module Peer) (List.concat peers) }
+      let f peer =
+        let%lwt result =
+          let* peer = Transport.connect transport peer in
+          Transport.send transport peer (Message.Join (address, endpoint))
+          >>= function
+          | Listed peers -> Lwt_result.return peers
+        in
+        match result with
+        | Result.Error e ->
+          let%lwt () =
+            Log.warn_lwt (fun m ->
+                m "unable to connect to peer %a: %s" Transport.Wire.Endpoint.pp
+                  peer e)
+          in
+          Lwt.return []
+        | Result.Ok peers -> Lwt.return peers
+      in
+      let%lwt peers = Lwt_list.map_p f endpoints in
+      let peers = List.concat peers in
+      let* () =
+        Log.info (fun m -> m "connected to %i peers" (List.length peers))
+      in
+      Lwt_result.return { peers = Set.of_list (module Peer) peers }
     and respond state = function
       | Message.Join peer ->
         Lwt_result.return

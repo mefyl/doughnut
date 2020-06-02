@@ -58,11 +58,11 @@ module Main (Mesh : Doughnut.Mesh.S) = struct
     Result.map_error ~f:(fun msg -> `Msg msg) @@ Lwt_main.run root
 end
 
-module Chord =
-  Doughnut.Chord.Make (Doughnut.Address.Int64) (Doughnut.Transport.Tcp)
+module Mesh =
+  Doughnut.Family.Make (Doughnut.Address.Int64) (Doughnut.Transport.Tcp)
 
 let () =
-  let module Main = Main (Chord) in
+  let module Main = Main (Mesh) in
   let main = Term.term_result Term.(const Main.main $ Main.address $ Main.peers)
   and info = Term.info ~version ~doc "doughnut" in
   Term.exit @@ Term.eval (main, info)
