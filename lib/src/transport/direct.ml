@@ -23,18 +23,22 @@ module Make () = struct
 
     let map : client Map.t ref = ref Map.empty
 
-    let to_sexp ({ id; _ } as ep) =
+    let to_string ({ id; _ } as ep) =
       map := Map.add id ep !map;
-      Sexp.Atom (Int.to_string id)
+      Int.to_string id
+
+    let to_sexp ep = Sexp.Atom (to_string ep)
+
+    let of_string s =
+      match Caml.int_of_string_opt s with
+      | Some id -> (
+        match Map.find_opt id !map with
+        | Some v -> Result.Ok v
+        | None -> Result.Error ("no such endpoint: " ^ s) )
+      | None -> Result.Error ("invalid endpoint: " ^ s)
 
     let of_sexp = function
-      | Sexp.Atom s -> (
-        match Caml.int_of_string_opt s with
-        | Some id -> (
-          match Map.find_opt id !map with
-          | Some v -> Result.Ok v
-          | None -> Result.Error ("no such endpoint: " ^ s) )
-        | None -> Result.Error ("invalid endpoint: " ^ s) )
+      | Sexp.Atom s -> of_string s
       | sexp ->
         Result.Error (Format.asprintf "invalid endpoint: %a" Sexp.pp sexp)
 

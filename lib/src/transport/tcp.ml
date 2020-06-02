@@ -66,6 +66,23 @@ module Endpoint = struct
   let pp fmt { addr; port } =
     Format.fprintf fmt "%s:%i" (Unix.string_of_inet_addr addr) port
 
+  let to_string { addr; port } =
+    Fmt.str "%s:%i" (Unix.string_of_inet_addr addr) port
+
+  let of_string s =
+    match String.split ~on:':' s with
+    | [ addr; port ] ->
+      let open Let.Syntax2 (Result) in
+      let+ addr =
+        try Result.return @@ Unix.inet_addr_of_string addr
+        with Failure _ -> Result.failf "invalid IP address: %s" addr
+      and+ port =
+        try Result.return @@ Int.of_string port
+        with Failure _ -> Result.failf "invalid port: %s" port
+      in
+      { addr; port }
+    | _ -> Result.failf "invalid TCP endpoint: %s" s
+
   let to_sexp { addr; port } =
     Sexp.List
       [
