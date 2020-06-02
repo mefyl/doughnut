@@ -112,4 +112,8 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
   let endpoint { server; transport; _ } = Transport.endpoint transport server
 
   let allocate _ _ = failwith "not implemented"
+
+  let wait { server; _ } = Transport.wait server
+
+  let stop { server; _ } = Transport.stop server
 end

@@ -622,6 +622,10 @@ struct
         | _ -> Lwt_result.fail "unexpected answer" )
     in
     Transport.state node.server set
+
+  let wait { server; _ } = Transport.wait server
+
+  let stop { server; _ } = Transport.stop server
 end
 
 module Make (A : Address.S) (W : Transport.Wire) :
