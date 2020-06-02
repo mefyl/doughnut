@@ -9,24 +9,9 @@ module Make () = struct
     info : Sexp.t Lwt_stream.t * (Sexp.t option -> unit);
   }
 
-  type 'state state_action =
-    | Action :
-        ('state -> ('state * 'result, string) Lwt_result.t)
-        * ('result, string) Result.t Lwt.u
-        -> 'state state_action
-
-  type 'state action =
-    | Query of Sexp.t
-    | Info of Sexp.t
-    | State of 'state state_action
-
   type 'state server = {
     client : client;
-    actions : 'state state_action Lwt_stream.t;
-    push_action : 'state state_action option -> unit;
-    mutable state : 'state;
-    done_ : (unit, string) Lwt_result.t;
-    end_ : (unit, string) Result.t Lwt.u;
+    state : 'state State.t;
   }
 
   module Endpoint = struct
@@ -66,6 +51,10 @@ module Make () = struct
 
   let connect _ ep = Lwt_result.return ep
 
+  type message =
+    | Query of Sexp.t
+    | Info of Sexp.t
+
   let serve ~init ~respond ~learn () =
     let server =
       let id = !count
@@ -75,9 +64,8 @@ module Make () = struct
     in
     let () = count := !count + 1 in
     let* state = init server in
-    let actions, push_action = Lwt_stream.create () in
-    let done_, end_ = Lwt.wait () in
-    let res = { client = server; state; actions; push_action; done_; end_ } in
+    let state = State.make state in
+    let res = { client = server; state } in
     let serve () =
       let read_query () =
         let open Let.Syntax (Lwt) in
@@ -87,38 +75,33 @@ module Make () = struct
         let open Let.Syntax (Lwt) in
         let+ info = Lwt_stream.next (fst server.info) in
         Result.return @@ Info info
-      and get_action () =
-        let open Let.Syntax (Lwt) in
-        let+ action = Lwt_stream.next actions in
-        Result.return @@ State action
       in
-      let rec loop state query info action =
-        Lwt.choose [ query; info; action ] >>= function
+      let rec loop query info =
+        Lwt.choose [ query; info ] >>= function
         | Query query ->
           let* () = Log.debug (fun m -> m "receive query %a" Sexp.pp query) in
-          let* state, response = respond state query in
+          let* response =
+            let action state = respond state query in
+            State.run state action
+          in
           let* () = Log.debug (fun m -> m "respond %a" Sexp.pp response) in
           let* () = Rpc.respond server.rpc response |> lwt_ok in
-          (loop [@tailcall]) state (read_query ()) info action
+          (loop [@tailcall]) (read_query ()) info
         | Info info ->
           let* () =
             Log.debug (fun m -> m "receive information %a" Sexp.pp info)
           in
-          let* state = learn state info in
-          (loop [@tailcall]) state query (read_info ()) action
-        | State (Action (f, resolver)) -> (
-          let* () = Log.debug (fun m -> m "apply state mutator") in
-          let open Lwt.Infix in
-          f state >>= function
-          | Result.Ok (state, result) ->
-            let () = Lwt.wakeup resolver (Result.Ok result) in
-            (loop [@tailcall]) state query info (get_action ())
-          | Result.Error e ->
-            let () = Lwt.wakeup resolver (Result.Error e) in
-            (loop [@tailcall]) state query info (get_action ()) )
+          let* () =
+            let action state =
+              let+ state = learn state info in
+              (state, ())
+            in
+            State.run state action
+          in
+          (loop [@tailcall]) query (read_info ())
       in
       let open Lwt.Infix in
-      loop state (read_query ()) (read_info ()) (get_action ()) >>= function
+      loop (read_query ()) (read_info ()) >>= function
       | Result.Ok () -> Lwt.return ()
       | Result.Error e ->
         Logs_lwt.warn ~src:Log.src (fun m ->
@@ -136,13 +119,11 @@ module Make () = struct
   let inform _ { info = _, send; _ } info =
     Lwt_result.return @@ send (Some info)
 
-  let state { push_action; _ } f =
-    let wait, resolve = Lwt.wait () in
-    let () = push_action (Some (Action (f, resolve))) in
-    wait
+  let state { state; _ } f = State.run state f
 
-  let wait { done_; _ } = done_
+  let wait { state; _ } =
+    let+ _final_state = State.wait state in
+    ()
 
-  (* FIXME *)
-  let stop { end_; _ } = Lwt.wakeup end_ (Result.Ok ())
+  let stop { state; _ } = State.stop state
 end
