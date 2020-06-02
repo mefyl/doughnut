@@ -3,9 +3,11 @@ open Base
 module type S = sig
   module Address : Address.S
 
+  module Transport : Transport.Transport
+
   type node
 
-  type endpoint
+  type endpoint = Transport.endpoint
 
   val make : Address.t -> endpoint list -> (node, string) Lwt_result.t
 
