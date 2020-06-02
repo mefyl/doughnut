@@ -52,6 +52,10 @@ module type Wire = sig
     t ->
     ('state server, string) Lwt_result.t
 
+  val wait : 'state server -> (unit, string) Lwt_result.t
+
+  val stop : 'state server -> unit
+
   val endpoint : t -> _ server -> Endpoint.t
 
   type id
@@ -110,4 +114,8 @@ module type Transport = sig
     t -> client -> query Message.t -> (response Message.t, string) Lwt_result.t
 
   val inform : t -> client -> info Message.t -> (unit, string) Lwt_result.t
+
+  val wait : 'state server -> (unit, string) Lwt_result.t
+
+  val stop : 'state server -> unit
 end

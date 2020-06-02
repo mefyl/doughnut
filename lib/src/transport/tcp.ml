@@ -192,3 +192,9 @@ let inform () client info =
   Lwt_io.write client.output (Csexp.to_string info) |> lwt_ok
 
 let state { state; _ } action = State.run state action
+
+let stop { state; _ } = State.stop state
+
+let wait { state; _ } =
+  let+ _final_state = State.wait state in
+  ()

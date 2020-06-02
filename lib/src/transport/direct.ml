@@ -25,6 +25,8 @@ module Make () = struct
     actions : 'state state_action Lwt_stream.t;
     push_action : 'state state_action option -> unit;
     mutable state : 'state;
+    done_ : (unit, string) Lwt_result.t;
+    end_ : (unit, string) Result.t Lwt.u;
   }
 
   module Endpoint = struct
@@ -74,7 +76,8 @@ module Make () = struct
     let () = count := !count + 1 in
     let* state = init server in
     let actions, push_action = Lwt_stream.create () in
-    let res = { client = server; state; actions; push_action } in
+    let done_, end_ = Lwt.wait () in
+    let res = { client = server; state; actions; push_action; done_; end_ } in
     let serve () =
       let read_query () =
         let open Let.Syntax (Lwt) in
@@ -137,4 +140,9 @@ module Make () = struct
     let wait, resolve = Lwt.wait () in
     let () = push_action (Some (Action (f, resolve))) in
     wait
+
+  let wait { done_; _ } = done_
+
+  (* FIXME *)
+  let stop { end_; _ } = Lwt.wakeup end_ (Result.Ok ())
 end
