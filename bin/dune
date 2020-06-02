@@ -1,0 +1,6 @@
+(include_subdirs unqualified)
+
+(executable
+ (name main)
+ (public_name doughnut)
+ (libraries cmdliner doughnut hex logs logs.threaded))
