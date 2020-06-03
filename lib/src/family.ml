@@ -109,6 +109,29 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
   let make ?(started = fun _ -> Lwt_result.return ()) address endpoints =
     let* () = Log.debug (fun m -> m "family(%a): make" Address.pp address) in
     let transport = Transport.make () in
+    let new_peer state peer =
+      let broadcast peer =
+        let f ((_, endpoint) as n) =
+          let%lwt res =
+            let* client = Transport.connect transport endpoint in
+            Transport.inform transport client (Newcomer peer)
+          in
+          result_warn () res "unable to notify %a of newcomer peer" Peer.pp n
+        in
+        Lwt_list.iter_p f (Set.to_list state.peers) |> lwt_ok
+      in
+      if not @@ Set.mem state.peers peer then
+        let* () = Log.debug (fun m -> m "joined by new peer %a" Peer.pp peer) in
+        let* () = broadcast peer in
+        let state = { state with peers = Set.add state.peers peer } in
+        let* () = report_state state in
+        Lwt_result.return state
+      else
+        let* () =
+          Log.debug (fun m -> m "skip peer %a we already know" Peer.pp peer)
+        in
+        Lwt_result.return state
+    in
     let init endpoint =
       let* () = started endpoint in
       let* () =
@@ -133,35 +156,14 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       Lwt_result.return state
     and respond state = function
       | Message.Join peer ->
-        let broadcast peer =
-          let f ((_, endpoint) as n) =
-            let%lwt res =
-              let* client = Transport.connect transport endpoint in
-              Transport.inform transport client (Newcomer peer)
-            in
-            result_warn () res "unable to notify %a of newcomer peer" Peer.pp n
-          in
-          Lwt_list.iter_p f (Set.to_list state.peers) |> lwt_ok
-        in
         let peers = Set.to_list state.peers in
-        let* state =
-          if not @@ Set.mem state.peers peer then
-            let* () =
-              Log.debug (fun m -> m "joined by new peer %a" Peer.pp peer)
-            in
-            let* () = broadcast peer in
-            let state = { state with peers = Set.add state.peers peer } in
-            let* () = report_state state in
-            Lwt_result.return state
-          else
-            Lwt_result.return state
-        in
+        let* state = new_peer state peer in
         Lwt_result.return
           (state, Message.Listed ((address, state.endpoint) :: peers))
       | List ->
         Lwt_result.return (state, Message.Listed (Set.to_list state.peers))
     and learn state = function
-      | _ -> Lwt_result.return state
+      | Message.Newcomer peer -> new_peer state peer
     in
     let* server = Transport.serve ~init ~respond ~learn transport in
     let res = { address; server; transport } in
