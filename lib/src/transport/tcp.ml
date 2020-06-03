@@ -5,39 +5,45 @@ let lwt_ok v = Lwt.map ~f:Result.return v
 module Csexp = struct
   include Csexp.Make (Sexp)
 
-  module Parser = Make_parser (struct
-    open Let.Syntax2 (Lwt_result)
+  module Parser = struct
+    include Make_parser (struct
+      open Let.Syntax2 (Lwt_result)
 
-    type t = Lwt_io.input_channel
+      type t = Lwt_io.input_channel
 
-    module Monad = struct
-      type 'a t = 'a Lwt.t
+      module Monad = struct
+        type 'a t = 'a Lwt.t
 
-      let return = Lwt.return
+        let return = Lwt.return
 
-      let bind v f = Lwt.bind ~f v
-    end
+        let bind v f = Lwt.bind ~f v
+      end
 
-    let read_string input count =
-      let res = Bytes.create count in
-      let rec read pos =
-        let* size = Lwt_io.read_into input res pos (count - pos) |> lwt_ok in
-        if size = 0 then
-          Lwt_result.fail "premature end of input"
-        else
-          let pos = pos + size in
-          if pos < count then
-            read pos
+      let read_string input count =
+        let res = Bytes.create count in
+        let rec read pos =
+          let* size = Lwt_io.read_into input res pos (count - pos) |> lwt_ok in
+          if size = 0 then
+            Lwt_result.fail "premature end of input"
           else
-            Lwt_result.return ()
-      in
-      let+ () = read 0 in
-      Bytes.unsafe_to_string ~no_mutation_while_string_reachable:res
+            let pos = pos + size in
+            if pos < count then
+              read pos
+            else
+              Lwt_result.return ()
+        in
+        let+ () = read 0 in
+        Bytes.unsafe_to_string ~no_mutation_while_string_reachable:res
 
-    let read_char input =
-      try Lwt_io.read_char input |> lwt_ok
-      with End_of_file -> Lwt_result.fail "premature end of input"
-  end)
+      let read_char input =
+        try Lwt_io.read_char input |> lwt_ok
+        with End_of_file -> Lwt_result.fail "premature end of input"
+    end)
+
+    let parse input =
+      try%lwt parse input
+      with End_of_file -> Lwt_result.fail "connection closed by peer"
+  end
 end
 
 type t = unit
