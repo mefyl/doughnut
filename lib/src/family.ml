@@ -103,6 +103,9 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       in
       Format.kasprintf f fmt
 
+  let report_state state =
+    Log.info (fun m -> m "connected to %i peers" (Set.length state.peers))
+
   let make ?(started = fun _ -> Lwt_result.return ()) address endpoints =
     let* () = Log.debug (fun m -> m "family(%a): make" Address.pp address) in
     let transport = Transport.make () in
@@ -125,10 +128,9 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       in
       let%lwt peers = Lwt_list.map_p f endpoints in
       let peers = List.concat peers in
-      let* () =
-        Log.info (fun m -> m "connected to %i peers" (List.length peers))
-      in
-      Lwt_result.return { endpoint; peers = Set.of_list (module Peer) peers }
+      let state = { endpoint; peers = Set.of_list (module Peer) peers } in
+      let* () = report_state state in
+      Lwt_result.return state
     and respond state = function
       | Message.Join peer ->
         let broadcast peer =
@@ -144,8 +146,13 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
         let peers = Set.to_list state.peers in
         let* state =
           if not @@ Set.mem state.peers peer then
+            let* () =
+              Log.debug (fun m -> m "joined by new peer %a" Peer.pp peer)
+            in
             let* () = broadcast peer in
-            Lwt_result.return { state with peers = Set.add state.peers peer }
+            let state = { state with peers = Set.add state.peers peer } in
+            let* () = report_state state in
+            Lwt_result.return state
           else
             Lwt_result.return state
         in
