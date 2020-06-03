@@ -70,7 +70,10 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
 
   module Transport = Transport.Make (Wire) (Message)
 
-  type state = { peers : (Peer.t, Peer.comparator_witness) Set.t }
+  type state = {
+    endpoint : Wire.Endpoint.t;
+    peers : (Peer.t, Peer.comparator_witness) Set.t;
+  }
 
   type node = {
     address : Address.t;
@@ -111,12 +114,13 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       let* () =
         Log.info (fun m -> m "connected to %i peers" (List.length peers))
       in
-      Lwt_result.return { peers = Set.of_list (module Peer) peers }
+      Lwt_result.return { endpoint; peers = Set.of_list (module Peer) peers }
     and respond state = function
       | Message.Join peer ->
         Lwt_result.return
-          ( { peers = Set.add state.peers peer },
-            Message.Listed (Set.to_list state.peers) )
+          ( { state with peers = Set.add state.peers peer },
+            Message.Listed ((address, state.endpoint) :: Set.to_list state.peers)
+          )
       | List ->
         Lwt_result.return (state, Message.Listed (Set.to_list state.peers))
     and learn state = function
