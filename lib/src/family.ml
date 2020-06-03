@@ -29,6 +29,10 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
           and+ ep = Wire.Endpoint.of_sexp ep in
           (address, ep)
         | _ -> Result.fail "invalid peer"
+
+      let pp =
+        let open Fmt in
+        pair ~sep:(const char '@') Address.pp Wire.Endpoint.pp
     end
 
     include T
@@ -42,6 +46,7 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       | Join : Peer.t -> query t
       | List : query t
       | Listed : Peer.t list -> response t
+      | Newcomer : Peer.t -> info t
 
     let sexp_of_message : type k. k t -> Sexp.t = function
       | Join e -> Sexp.List [ Sexp.Atom "join"; Peer.to_sexp e ]
@@ -49,6 +54,7 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       | Listed peers ->
         Sexp.List
           [ Sexp.Atom "list"; Sexp.List (List.map ~f:Peer.to_sexp peers) ]
+      | Newcomer peer -> Sexp.List [ Sexp.Atom "newcomer"; Peer.to_sexp peer ]
 
     let query_of_sexp = function
       | Sexp.List [ Sexp.Atom "join"; ep ] ->
@@ -65,6 +71,9 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       | r -> Result.fail (Fmt.str "invalid response: %a" Sexp.pp r)
 
     let info_of_sexp = function
+      | Sexp.List [ Sexp.Atom "newcomer"; peer ] ->
+        let+ peer = Peer.of_sexp peer in
+        Newcomer peer
       | i -> Result.fail (Fmt.str "invalid info: %a" Sexp.pp i)
   end
 
@@ -83,6 +92,17 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
 
   open Let.Syntax2 (Lwt_result)
 
+  let result_warn default result fmt =
+    match result with
+    | Result.Ok value ->
+      Format.ikfprintf (fun _fmt -> Lwt.return value) Format.str_formatter fmt
+    | Result.Error e ->
+      let f msg =
+        let%lwt () = Log.warn_lwt (fun m -> m "%s: %s" msg e) in
+        Lwt.return default
+      in
+      Format.kasprintf f fmt
+
   let make address endpoints =
     let* () = Log.debug (fun m -> m "family(%a): make" Address.pp address) in
     let transport = Transport.make () in
@@ -99,15 +119,8 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
           >>= function
           | Listed peers -> Lwt_result.return peers
         in
-        match result with
-        | Result.Error e ->
-          let%lwt () =
-            Log.warn_lwt (fun m ->
-                m "unable to connect to peer %a: %s" Transport.Wire.Endpoint.pp
-                  peer e)
-          in
-          Lwt.return []
-        | Result.Ok peers -> Lwt.return peers
+        result_warn [] result "unable to connect to peer %a"
+          Transport.Wire.Endpoint.pp peer
       in
       let%lwt peers = Lwt_list.map_p f endpoints in
       let peers = List.concat peers in
@@ -117,10 +130,26 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       Lwt_result.return { endpoint; peers = Set.of_list (module Peer) peers }
     and respond state = function
       | Message.Join peer ->
+        let broadcast peer =
+          let f ((_, endpoint) as n) =
+            let%lwt res =
+              let* client = Transport.connect transport endpoint in
+              Transport.inform transport client (Newcomer peer)
+            in
+            result_warn () res "unable to notify %a of newcomer peer" Peer.pp n
+          in
+          Lwt_list.iter_p f (Set.to_list state.peers) |> lwt_ok
+        in
+        let peers = Set.to_list state.peers in
+        let* state =
+          if not @@ Set.mem state.peers peer then
+            let* () = broadcast peer in
+            Lwt_result.return { state with peers = Set.add state.peers peer }
+          else
+            Lwt_result.return state
+        in
         Lwt_result.return
-          ( { state with peers = Set.add state.peers peer },
-            Message.Listed ((address, state.endpoint) :: Set.to_list state.peers)
-          )
+          (state, Message.Listed ((address, state.endpoint) :: peers))
       | List ->
         Lwt_result.return (state, Message.Listed (Set.to_list state.peers))
     and learn state = function
