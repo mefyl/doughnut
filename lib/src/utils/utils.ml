@@ -5,3 +5,5 @@ module Lwt_result = Utils_lwt_result
 module Result = Utils_result
 
 let lwt_ok = Lwt.map ~f:Result.return
+
+let fail fmt = Format.kasprintf (fun m -> Lwt_result.fail m) fmt

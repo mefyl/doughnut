@@ -3,4 +3,6 @@
 (executable
  (name main)
  (public_name doughnut)
+ (preprocess
+  (pps lwt_ppx))
  (libraries cmdliner doughnut hex logs logs.threaded))

@@ -2,8 +2,6 @@ open Utils
 
 let lwt_ok v = Lwt.map ~f:Result.return v
 
-let fail fmt = Format.kasprintf (fun m -> Lwt_result.fail m) fmt
-
 module Csexp = struct
   include Csexp.Make (Sexp)
 

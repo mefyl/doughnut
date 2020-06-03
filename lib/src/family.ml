@@ -103,10 +103,11 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       in
       Format.kasprintf f fmt
 
-  let make address endpoints =
+  let make ?(started = fun _ -> Lwt_result.return ()) address endpoints =
     let* () = Log.debug (fun m -> m "family(%a): make" Address.pp address) in
     let transport = Transport.make () in
     let init endpoint =
+      let* () = started endpoint in
       let* () =
         Log.debug (fun m ->
             m "family(%a): listening on %a" Address.pp address

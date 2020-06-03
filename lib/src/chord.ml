@@ -427,11 +427,16 @@ struct
    *   in
    *   check state 0 *)
 
-  let make_details ?(transport = Transport.make ()) address endpoints =
+  let make_details
+      ?(transport = Transport.make ())
+      ?(started = fun _ -> Lwt_result.return ())
+      address
+      endpoints =
     let* () =
       Logs_lwt.debug (fun m -> m "node(%a): make" Address.pp address) |> lwt_ok
     in
     let rec init endpoint =
+      let* () = started endpoint in
       let* successor, predecessor =
         let f endpoint =
           Option.some (successor_query transport (External endpoint) address)
