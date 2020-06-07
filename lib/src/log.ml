@@ -1,4 +1,5 @@
-open Utils
+open Base
+module Lwt = Utils_lwt
 
 let src = Logs.Src.create "doughnut"
 

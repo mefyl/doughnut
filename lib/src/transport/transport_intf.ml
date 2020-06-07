@@ -1,33 +1,11 @@
 open Base
 
-module MessageType = struct
-  type query = Query
-
-  type response = Response
-
-  type info = Info
-end
-
-module type Message = sig
-  type 'a t
-
-  open MessageType
-
-  val sexp_of_message : 'a t -> Sexp.t
-
-  val query_of_sexp : Sexp.t -> (query t, string) Result.t
-
-  val response_of_sexp : Sexp.t -> (response t, string) Result.t
-
-  val info_of_sexp : Sexp.t -> (info t, string) Result.t
-end
-
 module type Wire = sig
   type t
 
   type client
 
-  type 'state server
+  type server
 
   module Endpoint : sig
     type t
@@ -49,29 +27,52 @@ module type Wire = sig
 
   val connect : t -> Endpoint.t -> (client, string) Lwt_result.t
 
-  val serve :
-    init:(Endpoint.t -> ('state, string) Lwt_result.t) ->
-    respond:('state -> Sexp.t -> ('state * Sexp.t, string) Lwt_result.t) ->
-    learn:('state -> Sexp.t -> ('state, string) Lwt_result.t) ->
-    t ->
-    ('state server, string) Lwt_result.t
+  val bind : t -> (server, string) Lwt_result.t
 
-  val wait : 'state server -> (unit, string) Lwt_result.t
+  val serve : server -> (client -> (unit, string) Lwt_result.t) -> unit
 
-  val stop : 'state server -> unit
+  val wait : server -> (unit, string) Lwt_result.t
 
-  val endpoint : t -> _ server -> Endpoint.t
+  val stop : server -> unit
 
-  type id
+  val endpoint : server -> Endpoint.t
 
-  val send : t -> client -> Sexp.t -> (Sexp.t, string) Lwt_result.t
+  type message =
+    | Query of Sexp.t
+    | Info of Sexp.t
+    | Response of Sexp.t
 
-  val inform : t -> client -> Sexp.t -> (unit, string) Lwt_result.t
+  val send : client -> message -> (unit, string) Lwt_result.t
 
-  val state :
-    'state server ->
-    ('state -> ('state * 'result, string) Lwt_result.t) ->
-    ('result, string) Lwt_result.t
+  val receive : client -> (message, string) Lwt_result.t
+end
+
+module MessageType = struct
+  type query = Query
+
+  type response = Response
+
+  type info = Info
+end
+
+module type Message = sig
+  val name : string
+
+  val version : Semver.t
+
+  module Address : Address.S
+
+  type 'a t
+
+  open MessageType
+
+  val sexp_of_message : 'a t -> Sexp.t
+
+  val query_of_sexp : Sexp.t -> (query t, string) Result.t
+
+  val response_of_sexp : Sexp.t -> (response t, string) Result.t
+
+  val info_of_sexp : Sexp.t -> (info t, string) Result.t
 end
 
 module type Transport = sig
@@ -83,17 +84,15 @@ module type Transport = sig
 
   type 'state server
 
-  type client = Wire.client
+  type client
 
   type endpoint = Wire.Endpoint.t
-
-  type id = Wire.id
 
   type t
 
   val wire : t -> Wire.t
 
-  val make : unit -> t
+  val make : Message.Address.t -> t
 
   val connect : t -> endpoint -> (client, string) Lwt_result.t
 
@@ -112,12 +111,12 @@ module type Transport = sig
     ('state -> ('state * 'result, string) Lwt_result.t) ->
     ('result, string) Lwt_result.t
 
-  val endpoint : t -> _ server -> endpoint
+  val endpoint : _ server -> endpoint
 
   val send :
-    t -> client -> query Message.t -> (response Message.t, string) Lwt_result.t
+    client -> query Message.t -> (response Message.t, string) Lwt_result.t
 
-  val inform : t -> client -> info Message.t -> (unit, string) Lwt_result.t
+  val inform : client -> info Message.t -> (unit, string) Lwt_result.t
 
   val wait : 'state server -> (unit, string) Lwt_result.t
 

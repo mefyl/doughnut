@@ -3,29 +3,36 @@ open Utils
 open Let.Syntax2 (Lwt_result)
 
 module Make () = struct
+  type t = { mutable count : int }
+
+  type message =
+    | Query of Sexp.t
+    | Info of Sexp.t
+    | Response of Sexp.t
+
   type client = {
-    id : int;
-    rpc : (Sexp.t, Sexp.t) Rpc.t;
-    info : Sexp.t Lwt_stream.t * (Sexp.t option -> unit);
+    send : message option -> unit;
+    receive : message Lwt_stream.t;
   }
 
-  type 'state server = {
-    client : client;
-    state : 'state State.t;
+  type server = {
+    connections : client Lwt_stream.t;
+    add_connection : client option -> unit;
+    id : int;
+    wait : unit Lwt.t;
+    stop : unit Lwt.u;
   }
 
   module Endpoint = struct
-    type t = client
+    type t = server
 
     let pp fmt { id; _ } = Format.pp_print_int fmt id
 
     module Map = Stdlib.Map.Make (Int)
 
-    let map : client Map.t ref = ref Map.empty
+    let map : server Map.t ref = ref Map.empty
 
-    let to_string ({ id; _ } as ep) =
-      map := Map.add id ep !map;
-      Int.to_string id
+    let to_string { id; _ } = Int.to_string id
 
     let to_sexp ep = Sexp.Atom (to_string ep)
 
@@ -45,89 +52,49 @@ module Make () = struct
     let compare { id = l; _ } { id = r; _ } = l - r
   end
 
-  let count = ref 0
+  let make () = { count = 0 }
 
-  type t = unit
-
-  type id = unit
-
-  let make () = ()
-
-  let connect _ ep = Lwt_result.return ep
-
-  type message =
-    | Query of Sexp.t
-    | Info of Sexp.t
-
-  let serve ~init ~respond ~learn () =
-    let server =
-      let id = !count
-      and rpc = Rpc.make ()
-      and info = Lwt_stream.create () in
-      { id; rpc; info }
+  let connect _ { add_connection; _ } =
+    let client_receive, server_send = Lwt_stream.create ()
+    and server_receive, client_send = Lwt_stream.create () in
+    let () =
+      add_connection (Some { send = server_send; receive = server_receive })
     in
-    let () = count := !count + 1 in
-    let* state = init server in
-    let state = State.make state in
-    let res = { client = server; state } in
-    let serve () =
-      let read_query () =
-        let open Let.Syntax (Lwt) in
-        let+ query = Rpc.receive server.rpc in
-        Result.return @@ Query query
-      and read_info () =
-        let open Let.Syntax (Lwt) in
-        let+ info = Lwt_stream.next (fst server.info) in
-        Result.return @@ Info info
-      in
-      let rec loop query info =
-        Lwt.choose [ query; info ] >>= function
-        | Query query ->
-          let* () = Log.debug (fun m -> m "receive query %a" Sexp.pp query) in
-          let* response =
-            let action state = respond state query in
-            State.run state action
-          in
-          let* () = Log.debug (fun m -> m "respond %a" Sexp.pp response) in
-          let* () = Rpc.respond server.rpc response |> lwt_ok in
-          (loop [@tailcall]) (read_query ()) info
-        | Info info ->
-          let* () =
-            Log.debug (fun m -> m "receive information %a" Sexp.pp info)
-          in
-          let* () =
-            let action state =
-              let+ state = learn state info in
-              (state, ())
-            in
-            State.run state action
-          in
-          (loop [@tailcall]) query (read_info ())
-      in
-      let open Lwt.Infix in
-      loop (read_query ()) (read_info ()) >>= function
+    Lwt_result.return { send = client_send; receive = client_receive }
+
+  let bind wire =
+    let id = wire.count - 1
+    and connections, add_connection = Lwt_stream.create ()
+    and wait, stop = Lwt.wait () in
+    wire.count <- wire.count + 1;
+    Lwt_result.return { connections; add_connection; id; wait; stop }
+
+  let serve server f =
+    let f client =
+      let open Let.Syntax (Lwt) in
+      f client >>= function
       | Result.Ok () -> Lwt.return ()
-      | Result.Error e ->
-        Logs_lwt.warn ~src:Log.src (fun m ->
-            m "direct transport fatal error: %s" e)
+      | Result.Error msg ->
+        let* () = Log.warn_lwt (fun m -> m "client fatal error: %s" msg) in
+        Lwt.return ()
     in
-    let () = Lwt.async serve in
-    Lwt_result.return res
+    let rec accept () =
+      let open Let.Syntax (Lwt) in
+      try%lwt
+        let* client = Lwt_stream.next server.connections in
+        Lwt.async (fun () -> f client);
+        (accept [@tailcall]) ()
+      with Lwt_stream.Empty -> Lwt.return @@ Lwt.wakeup server.stop ()
+    in
+    Lwt.async accept
 
-  let endpoint _ s = s.client
+  let endpoint server = server
 
-  let send _ { rpc; _ } query =
-    Logs.debug (fun m -> m "send %a" Sexp.pp query);
-    Rpc.send rpc query |> Lwt.map ~f:Result.return
+  let send { send; _ } message = Lwt_result.return @@ send (Some message)
 
-  let inform _ { info = _, send; _ } info =
-    Lwt_result.return @@ send (Some info)
+  let receive { receive; _ } = Lwt_stream.next receive |> lwt_ok
 
-  let state { state; _ } f = State.run state f
+  let wait { wait; _ } = wait |> lwt_ok
 
-  let wait { state; _ } =
-    let+ _final_state = State.wait state in
-    ()
-
-  let stop { state; _ } = State.stop state
+  let stop { add_connection; _ } = add_connection None
 end

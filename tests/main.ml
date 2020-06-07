@@ -6,50 +6,58 @@ open Let.Syntax2 (Lwt_result)
 module Format = Caml.Format
 
 module Address : Doughnut.Address.S with type t = int = struct
-  type t = int
+  module T = struct
+    type t = int
 
-  let compare = Stdlib.compare
+    let compare = Stdlib.compare
 
-  let to_string = Int.to_string
+    let to_string = Int.to_string
 
-  let of_string s =
-    try Result.Ok (Int.of_string s)
-    with Failure _ -> Result.Error ("invalid integer address: " ^ s)
+    let of_string s =
+      try Result.Ok (Int.of_string s)
+      with Failure _ -> Result.Error ("invalid integer address: " ^ s)
 
-  let sexp_of i = Sexp.Atom (Int.to_string i)
+    let sexp_of i = Sexp.Atom (Int.to_string i)
 
-  let of_sexp = function
-    | Sexp.Atom s -> of_string s
-    | sexp -> Result.Error (Format.asprintf "invalid address: %a" Sexp.pp sexp)
+    let sexp_of_t = sexp_of
 
-  let space_log = 8
+    let of_sexp = function
+      | Sexp.Atom s -> of_string s
+      | sexp ->
+        Result.Error (Format.asprintf "invalid address: %a" Sexp.pp sexp)
 
-  let null = 0
+    let space_log = 8
 
-  let log n =
-    if n >= space_log then
-      failwith "address log out of bound"
-    else
-      1 lsl n
+    let null = 0
 
-  let pp fmt addr = Format.pp_print_int fmt addr
-
-  module O = struct
-    let ( = ) = Stdlib.( = )
-
-    let ( < ) = Stdlib.( < )
-
-    let ( <= ) = Stdlib.( <= )
-
-    let ( + ) l r = (l + r) % 256
-
-    let ( - ) l r =
-      let res = (l - r) % 256 in
-      if res < 0 then
-        res + 256
+    let log n =
+      if n >= space_log then
+        failwith "address log out of bound"
       else
-        res
+        1 lsl n
+
+    let pp fmt addr = Format.pp_print_int fmt addr
+
+    module O = struct
+      let ( = ) = Stdlib.( = )
+
+      let ( < ) = Stdlib.( < )
+
+      let ( <= ) = Stdlib.( <= )
+
+      let ( + ) l r = (l + r) % 256
+
+      let ( - ) l r =
+        let res = (l - r) % 256 in
+        if res < 0 then
+          res + 256
+        else
+          res
+    end
   end
+
+  include T
+  include Comparator.Make (T)
 end
 
 module Alcotest = struct
@@ -92,34 +100,39 @@ module Transport = struct
     stats : stats;
   }
 
+  type nonrec client = {
+    t : t;
+    client : client;
+  }
+
   let wire t = wire t.wrapped
 
-  let make_details query_filter =
+  let make_details address query_filter =
     {
-      wrapped = make ();
+      wrapped = make address;
       query_filter;
       query = Rpc.make ();
       stats = { filtered = 0 };
     }
 
-  let make () = make_details (fun _ _ -> false)
+  let make address = make_details address (fun _ _ -> false)
 
-  let connect t = connect t.wrapped
+  let connect t ep =
+    let+ client = connect t.wrapped ep in
+    { client; t }
 
   let serve ~init ~respond ~learn t = serve ~init ~respond ~learn t.wrapped
 
-  let endpoint t = endpoint t.wrapped
-
-  let send t c m =
+  let send { client; t } m =
     if t.query_filter t.stats m then (
       t.stats.filtered <- t.stats.filtered + 1;
       Lwt.map ~f:Result.return (Rpc.send t.query m) >>= function
-      | Passthrough -> send t.wrapped c m
+      | Passthrough -> send client m
       | Response r -> Lwt_result.return r
     ) else
-      send t.wrapped c m
+      send client m
 
-  let inform t = inform t.wrapped
+  let inform client = inform client.client
 end
 
 module Dht = Doughnut.Chord.MakeDetails (Address) (Wire) (Transport)
@@ -183,10 +196,10 @@ let chord_join_race order () =
       | ChordMessage.Hello _ -> filtered = 0
       | _ -> false )
   in
-  let transport_a = Transport.make_details filter
-  and transport_b = Transport.make_details filter in
+  let transport_a = Transport.make_details 10 filter
+  and transport_b = Transport.make_details 20 filter in
   let make_dht (transport, addr, pred) =
-    let* dht = Dht.make_details ~transport addr eps in
+    let* dht = Dht.make_details addr transport eps in
     let+ predecessor = Dht.predecessor dht in
     let () = Alcotest.(check address "predecessor" pred predecessor) in
     dht
@@ -237,15 +250,15 @@ let chord_join_race order () =
 
 let chord_fix_index_overshoot () =
   let count = ref 0 in
-  let make_details =
+  let make_details addr =
     let filter _ = function
       | ChordMessage.Successor _ ->
         count := !count + 1;
         false
       | _ -> false
     in
-    let transport = Transport.make_details filter in
-    Dht.make_details ~transport
+    let transport = Transport.make_details addr filter in
+    Dht.make_details addr transport
   in
   (* Setup so dht_0 wrongfully thinks dht_2 is its successor. *)
   Logs.info (fun m -> m "create DHTs");
@@ -281,8 +294,8 @@ let chord_complexity () =
             false
           | _ -> false
         in
-        let transport = Transport.make_details filter in
-        let* dht = Dht.make_details ~transport address endpoints in
+        let transport = Transport.make_details address filter in
+        let* dht = Dht.make_details address transport endpoints in
         Lwt_result.return (Dht.endpoint dht :: endpoints, dht))
   in
   ignore endpoints;

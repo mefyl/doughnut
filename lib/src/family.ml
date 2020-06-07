@@ -40,6 +40,11 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
   end
 
   module Message = struct
+    let name = "family"
+
+    let version = (0, 0, 0)
+
+    module Address = Address
     open Transport.MessageType
 
     type _ t =
@@ -92,29 +97,18 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
 
   open Let.Syntax2 (Lwt_result)
 
-  let result_warn default result fmt =
-    match result with
-    | Result.Ok value ->
-      Format.ikfprintf (fun _fmt -> Lwt.return value) Format.str_formatter fmt
-    | Result.Error e ->
-      let f msg =
-        let%lwt () = Log.warn_lwt (fun m -> m "%s: %s" msg e) in
-        Lwt.return default
-      in
-      Format.kasprintf f fmt
-
   let report_state state =
     Log.info (fun m -> m "connected to %i peers" (Set.length state.peers))
 
   let make ?(started = fun _ -> Lwt_result.return ()) address endpoints =
     let* () = Log.debug (fun m -> m "family(%a): make" Address.pp address) in
-    let transport = Transport.make () in
+    let transport = Transport.make address in
     let new_peer state peer =
       let broadcast peer =
         let f ((_, endpoint) as n) =
           let%lwt res =
             let* client = Transport.connect transport endpoint in
-            Transport.inform transport client (Newcomer peer)
+            Transport.inform client (Newcomer peer)
           in
           result_warn () res "unable to notify %a of newcomer peer" Peer.pp n
         in
@@ -142,8 +136,7 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
       let f peer =
         let%lwt result =
           let* peer = Transport.connect transport peer in
-          Transport.send transport peer (Message.Join (address, endpoint))
-          >>= function
+          Transport.send peer (Message.Join (address, endpoint)) >>= function
           | Listed peers -> Lwt_result.return peers
         in
         result_warn [] result "unable to connect to peer %a"
@@ -169,7 +162,7 @@ module Make (A : Address.S) (W : Transport.Wire) : Allocator.S = struct
     let res = { address; server; transport } in
     Lwt_result.return res
 
-  let endpoint { server; transport; _ } = Transport.endpoint transport server
+  let endpoint { server; _ } = Transport.endpoint server
 
   let allocate _ _ = failwith "not implemented"
 

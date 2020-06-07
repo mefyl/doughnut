@@ -9,6 +9,10 @@ module Message (A : Address.S) (Wire : Transport.Wire) = struct
   module Address = A
   module Wire = Wire
 
+  let name = "chord"
+
+  let version = (0, 0, 0)
+
   type peer = {
     address : Address.t;
     endpoint : Wire.Endpoint.t;
@@ -149,13 +153,15 @@ end
 module MakeDetails
     (A : Address.S)
     (W : Transport.Wire)
-    (T : Transport.Transport
-           with module Wire = W
-            and type 'a Message.t = 'a Message(A)(W).t) =
+    (Transport : Transport.Transport
+                   with module Wire = W
+                    and module Message.Address = A
+                    and type 'a Message.t = 'a Message(A)(W).t) =
 struct
   module Address = A
   module Message = Message (A) (W)
-  module Transport = T
+  module Wire = W
+  module Transport = Transport
   module Map = Stdlib.Map.Make (Address)
 
   type endpoint = Transport.endpoint
@@ -288,7 +294,7 @@ struct
     let* () = Log.debug (fun m -> m "lookup (%a)" Address.pp addr) in
     let query ep =
       let* client = Transport.connect transport ep in
-      Transport.send transport client (Message.Successor addr)
+      Transport.send client (Message.Successor addr)
     in
     let rec finalize source ?(failed = false) (peer : Message.peer) =
       let* () =
@@ -309,7 +315,7 @@ struct
                       Message.pp_peer source Message.pp_peer successor)
               in
               let* () =
-                Transport.inform transport client
+                Transport.inform client
                   (Message.Invalidate { address = addr; actual = successor })
               in
               Lwt_result.return None
@@ -428,10 +434,7 @@ struct
    *   check state 0 *)
 
   let make_details
-      ?(transport = Transport.make ())
-      ?(started = fun _ -> Lwt_result.return ())
-      address
-      endpoints =
+      address transport ?(started = fun _ -> Lwt_result.return ()) endpoints =
     let* () =
       Logs_lwt.debug (fun m -> m "node(%a): make" Address.pp address) |> lwt_ok
     in
@@ -467,7 +470,7 @@ struct
       let* joined =
         let hello (peer : Message.peer) =
           let* client = Transport.connect transport peer.endpoint in
-          Transport.send transport client
+          Transport.send client
             (Message.Hello
                {
                  self = { address = state.address; endpoint };
@@ -577,9 +580,10 @@ struct
     let+ server = Transport.serve ~init ~respond ~learn transport in
     { server; transport }
 
-  let make = make_details ~transport:(Transport.make ())
+  let make ?started address =
+    make_details ?started address (Transport.make address)
 
-  let endpoint node = Transport.endpoint node.transport node.server
+  let endpoint node = Transport.endpoint node.server
 
   let get { server; transport } addr =
     let get state =
@@ -593,7 +597,7 @@ struct
       | Some ((peer, _), healed_state) -> (
         let state = Option.value ~default:state healed_state in
         let* client = Transport.connect transport peer.endpoint in
-        Transport.send transport client (Message.Get addr) >>= function
+        Transport.send client (Message.Get addr) >>= function
         | Message.Value v -> Lwt_result.return (state, v)
         | Message.Not_found ->
           Lwt_result.fail
@@ -617,8 +621,7 @@ struct
       | Some ((peer, _), healed_state) -> (
         let state = Option.value ~default:state healed_state in
         let* client = Transport.connect node.transport peer.endpoint in
-        Transport.send node.transport client (Message.Set (key, data))
-        >>= function
+        Transport.send client (Message.Set (key, data)) >>= function
         | Message.Done -> Lwt_result.return (state, ())
         | Message.Not_found ->
           Lwt_result.fail

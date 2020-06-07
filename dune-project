@@ -33,4 +33,6 @@
   (ocamlformat
    (and
     (= 0.14.2)
-    :dev))))
+    :dev))
+  (semver
+   (>= 0.1.0))))

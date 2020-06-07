@@ -3,6 +3,6 @@
 (library
  (name doughnut)
  (public_name doughnut)
- (libraries base csexp fmt logs logs.lwt lwt lwt.unix threads.posix)
+ (libraries base csexp fmt logs logs.lwt lwt lwt.unix semver threads.posix)
  (preprocess
   (pps lwt_ppx)))

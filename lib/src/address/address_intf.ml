@@ -5,8 +5,7 @@ open Base
     Every block and node is attributed a unique address. The size of the address
     space, ie the number of possible different addresses, must be a power of 2. *)
 module type S = sig
-  (** An address *)
-  type t
+  include Comparator.S
 
   (** Global ordering over adresses *)
   val compare : t -> t -> int

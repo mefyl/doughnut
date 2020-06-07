@@ -1,7 +1,5 @@
 open Utils
 
-let lwt_ok v = Lwt.map ~f:Result.return v
-
 module Csexp = struct
   include Csexp.Make (Sexp)
 
@@ -47,6 +45,11 @@ module Csexp = struct
 end
 
 type t = unit
+
+type message =
+  | Query of Sexp.t
+  | Info of Sexp.t
+  | Response of Sexp.t
 
 module Endpoint = struct
   type t = {
@@ -104,10 +107,13 @@ module Endpoint = struct
     | sexp -> Result.Error (Format.asprintf "invalid endpoint: %a" Sexp.pp sexp)
 end
 
-type 'state server = {
+type server = {
   socket : Lwt_unix.file_descr;
   endpoint : Endpoint.t;
-  state : 'state State.t;
+  ended : unit Lwt.t;
+  end_ : unit Lwt.u;
+  stopped : unit Lwt.t;
+  stop : unit Lwt.u;
 }
 
 open Let.Syntax2 (Lwt_result)
@@ -115,7 +121,6 @@ open Let.Syntax2 (Lwt_result)
 type client = {
   output : Lwt_io.output_channel;
   input : Lwt_io.input_channel;
-  mutable rpc_count : int;
 }
 
 let make () = ()
@@ -126,7 +131,7 @@ let connect () ({ Endpoint.addr; port } as ep) =
     with Unix.Unix_error (Unix.ECONNREFUSED, _, _) ->
       fail "connection to %a refused" Endpoint.pp ep
   in
-  { input; output; rpc_count = 0 }
+  { input; output }
 
 type id = int
 
@@ -134,98 +139,70 @@ let convert_endpoint = function
   | Unix.ADDR_INET (addr, port) -> { Endpoint.addr; port }
   | _ -> failwith "unexpected Unix domain socket"
 
-let serve ~init ~respond ~learn () =
+let bind () =
   let open Let.Syntax (Lwt) in
   let socket = Lwt_unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   let* () =
     let address = Unix.ADDR_INET (Unix.inet_addr_of_string "0.0.0.0", 0) in
     Lwt_unix.bind socket address
   in
-  let () = Lwt_unix.listen socket 64 in
-  let endpoint = convert_endpoint @@ Lwt_unix.getsockname socket in
-  let open Let.Syntax2 (Lwt_result) in
-  let* state = init endpoint in
-  let state = State.make state in
-  let serve () =
-    let serve_client socket addr () =
-      let input = Lwt_io.of_fd ~mode:Lwt_io.input socket
-      and output = Lwt_io.of_fd ~mode:Lwt_io.output socket in
-      let rec loop () =
-        Csexp.Parser.parse input >>= function
-        | Sexp.List [ Sexp.Atom "query"; Sexp.List [ Sexp.Atom id; query ] ] ->
-          let* response =
-            let action state = respond state query in
-            State.run state action
-          in
-          let response = Sexp.List [ Sexp.Atom id; response ] in
-          let* () = Lwt_io.write output @@ Csexp.to_string response |> lwt_ok in
-          (loop [@tailcall]) ()
-        | Sexp.List [ Sexp.Atom "info"; info ] ->
-          let* () =
-            let action state =
-              let+ state = learn state info in
-              (state, ())
-            in
-            State.run state action
-          in
-          (loop [@tailcall]) ()
-        | e -> fail "invalid message: %a" Sexp.pp e
+  let endpoint = convert_endpoint @@ Lwt_unix.getsockname socket
+  and stopped, stop = Lwt.wait ()
+  and ended, end_ = Lwt.wait () in
+  Lwt_result.return { socket; endpoint; stopped; stop; ended; end_ }
+
+let alternative a b =
+  Lwt.choose [ Lwt.map ~f:Either.first a; Lwt.map ~f:Either.second b ]
+
+let serve server f =
+  let open Let.Syntax (Lwt) in
+  let f client () =
+    let* res = f client in
+    result_warn () res "client error"
+  in
+  let rec accept () =
+    alternative (Lwt_unix.accept server.socket) server.stopped >>= function
+    | Either.First (socket, _) ->
+      let client =
+        {
+          input = Lwt_io.of_fd ~mode:Lwt_io.input socket;
+          output = Lwt_io.of_fd ~mode:Lwt_io.output socket;
+        }
       in
-      let open Lwt.Infix in
-      loop () >>= function
-      | Result.Ok () -> Lwt.return ()
-      | Result.Error e ->
-        Logs_lwt.warn ~src:Log.src (fun m ->
-            m "client %a error: %s" Endpoint.pp addr e)
-    in
-    let rec accept () =
-      let open Let.Syntax (Lwt) in
-      let* client, addr = Lwt_unix.accept socket in
-      let () = Lwt.async @@ serve_client client (convert_endpoint addr) in
+      let () = Lwt.async @@ f client in
       (accept [@tailcall]) ()
+    | Either.Second () ->
+      (* FIXME: close all clients properly etc *)
+      let+ () = Lwt_unix.close server.socket in
+      Lwt.wakeup server.end_ ()
+  in
+  Lwt.async accept
+
+let endpoint { endpoint; _ } = endpoint
+
+let send { output; _ } message =
+  let message =
+    let kind, message =
+      match message with
+      | Query m -> ("query", m)
+      | Info m -> ("info", m)
+      | Response m -> ("response", m)
     in
-    accept ()
+    Sexp.List [ Sexp.Atom kind; message ]
   in
-  let () = Lwt.async serve in
-  Lwt_result.return { socket; endpoint; state }
+  let* () = Log.debug (fun m -> m "send: %a" Sexp.pp message) in
+  Lwt_io.write output (Csexp.to_string message) |> lwt_ok
 
-let endpoint () { endpoint; _ } = endpoint
+let receive { input; _ } =
+  Csexp.Parser.parse input >>= function
+  | Sexp.List [ Sexp.Atom kind; message ] -> (
+    match kind with
+    | "query" -> Lwt_result.return @@ Query message
+    | "info" -> Lwt_result.return @@ Info message
+    | "response" -> Lwt_result.return @@ Response message
+    | s -> fail "invalid message type: %S" s )
+  | sexp -> fail "invalid message: %a" Sexp.pp sexp
 
-let send () client query =
-  let* () = Log.debug (fun m -> m "send query: %a" Sexp.pp query) in
-  let read_rpc input =
-    Csexp.Parser.parse input >>= function
-    | Sexp.List [ Sexp.Atom id; response ] -> (
-      match Int.of_string id with
-      | id -> Lwt_result.return (id, response)
-      | exception _ -> fail "invalid response id: %s" id )
-    | r -> fail "invalid response: %a" Sexp.pp r
-  in
-  let rpc_id = client.rpc_count in
-  let () = client.rpc_count <- client.rpc_count + 1 in
-  let query =
-    Sexp.List
-      [
-        Sexp.Atom "query"; Sexp.List [ Sexp.Atom (Int.to_string rpc_id); query ];
-      ]
-  in
-  let* () = Lwt_io.write client.output (Csexp.to_string query) |> lwt_ok in
-  let* id, response = read_rpc client.input in
-  if id = rpc_id then
-    let* () = Log.debug (fun m -> m "receive response: %a" Sexp.pp response) in
-    Lwt_result.return response
-  else
-    fail "wrong response id: %i" id
+let stop { stop; _ } = Lwt.wakeup stop ()
 
-let inform () client info =
-  let* () = Log.debug (fun m -> m "send %a" Sexp.pp info) in
-  let info = Sexp.List [ Sexp.Atom "info"; info ] in
-  Lwt_io.write client.output (Csexp.to_string info) |> lwt_ok
-
-let state { state; _ } action = State.run state action
-
-let stop { state; _ } = State.stop state
-
-let wait { state; _ } =
-  let+ _final_state = State.wait state in
-  ()
+let wait { ended; _ } = ended |> lwt_ok
