@@ -140,6 +140,8 @@ module Transport = struct
     let+ client = connect server endpoint in
     { client; t }
 
+  let address { server; _ } = address server
+
   let endpoint { server; _ } = endpoint server
 
   let state { server; _ } = state server
@@ -175,8 +177,7 @@ let generic_join _ =
     Lwt_list.fold_map ~init:[] ~f addresses
   in
   let f dht =
-    let* state = Dht.state dht in
-    Logs_lwt.debug (fun m -> m "  dht: %a" Dht.pp_node state) |> lwt_ok
+    Logs_lwt.debug (fun m -> m "  dht: %a" Dht.pp_node dht) |> lwt_ok
   in
   let* () = Lwt_list.iter ~f dhts in
   ignore endpoints;
