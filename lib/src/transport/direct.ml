@@ -28,18 +28,23 @@ module Make () = struct
 
     let pp fmt { id; _ } = Format.pp_print_int fmt id
 
-    module Map = Stdlib.Map.Make (Int)
+    let map : (Int.t, server, Int.comparator_witness) Map.t ref =
+      ref (Map.empty (module Int))
 
-    let map : server Map.t ref = ref Map.empty
-
-    let to_string { id; _ } = Int.to_string id
+    let to_string ({ id; _ } as server) =
+      let () =
+        match Map.add !map ~key:id ~data:server with
+        | `Ok m -> map := m
+        | `Duplicate -> ()
+      in
+      Int.to_string id
 
     let to_sexp ep = Sexp.Atom (to_string ep)
 
     let of_string s =
       match Caml.int_of_string_opt s with
       | Some id -> (
-        match Map.find_opt id !map with
+        match Map.find !map id with
         | Some v -> Result.Ok v
         | None -> Result.Error ("no such endpoint: " ^ s) )
       | None -> Result.Error ("invalid endpoint: " ^ s)
@@ -63,7 +68,7 @@ module Make () = struct
     Lwt_result.return { send = client_send; receive = client_receive }
 
   let bind wire =
-    let id = wire.count - 1
+    let id = wire.count
     and connections, add_connection = Lwt_stream.create ()
     and wait, stop = Lwt.wait () in
     wire.count <- wire.count + 1;
