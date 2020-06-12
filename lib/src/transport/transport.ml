@@ -18,18 +18,36 @@ module Make (W : Wire) (M : Message) = struct
     server : Wire.server;
     state : 'state State.t;
     wire : Wire.t;
+    respond :
+      'state server ->
+      MessageType.query Message.t ->
+      (MessageType.response Message.t, string) Lwt_result.t;
+    learn :
+      'state server -> MessageType.info Message.t -> (unit, string) Lwt_result.t;
   }
 
   and 'state client = {
     client : Wire.client;
     client_address : Message.Address.t;
-    transport : 'state server;
+    client_server : 'state server;
     mutable query_id : int;
     mutable queries :
       (Int.t, (Sexp.t, string) Result.t Lwt.u, Int.comparator_witness) Map.t;
   }
 
-  let handshake state client =
+  let pp_client fmt { client_address; _ } =
+    let f =
+      let open Fmt in
+      const string "peer " ++ const Address.pp client_address
+    in
+    f fmt ()
+
+  type handshake_error =
+    | Already_connected
+    | Error of string
+
+  let handshake server client =
+    let convert_error v = Lwt_result.map_err (fun m -> Error m) v in
     let* () =
       Wire.send client
         (Info
@@ -39,54 +57,81 @@ module Make (W : Wire) (M : Message) = struct
                 Sexp.Atom Message.name;
                 Sexp.Atom (Semver.to_string Message.version);
                 (* FIXME: check address format compatibility *)
-                Message.Address.sexp_of state.address;
+                Message.Address.sexp_of server.address;
               ]))
+      |> convert_error
     in
-    let* peer_address, peer_version =
-      Wire.receive client >>= function
+    let ok () =
+      Wire.send client (Info (Sexp.List [ Sexp.Atom "ok" ])) |> convert_error
+    and ko fmt =
+      let ko reason =
+        let* () =
+          Wire.send client
+            (Info (Sexp.List [ Sexp.Atom "ko"; Sexp.Atom reason ]))
+          |> convert_error
+        in
+        Lwt_result.fail @@ Error reason
+      in
+      Format.ksprintf ko fmt
+    and already_connected () =
+      let* () =
+        Wire.send client (Info (Sexp.List [ Sexp.Atom "duplicate" ]))
+        |> convert_error
+      in
+      Lwt_result.fail Already_connected
+    in
+    let* peer_address, _peer_version =
+      Wire.receive client |> convert_error >>= function
       | Info
           (Sexp.List
             [ Sexp.Atom "doughnut"; Sexp.Atom name; Sexp.Atom version; address ])
         ->
-        let open Let.Syntax2 (Result) in
-        Lwt.return
-        @@ let+ () =
-             if String.compare name Message.name <> 0 then
-               Result.failf "DHT type mismatch: %s <> %s" name Message.name
-             else
-               Result.return ()
-           and+ version =
-             match Semver.of_string version with
-             | None -> Result.failf "invalid version: %s" version
-             | Some v -> Result.return v
-           and+ address = Message.Address.of_sexp address in
-           (address, version)
+        let* () =
+          if String.compare name Message.name <> 0 then
+            ko "DHT type mismatch: %s <> %s" name Message.name
+          else
+            Lwt_result.return ()
+        in
+        let+ version =
+          match Semver.of_string version with
+          | None -> ko "invalid version: %s" version
+          | Some v -> Lwt_result.return v
+        and+ address =
+          convert_error @@ Lwt.return @@ Message.Address.of_sexp address
+        in
+        (address, version)
       | Info m
       | Query m
       | Response m ->
-        fail "invalid handshake: %a" Sexp.pp m
+        convert_error @@ fail "invalid handshake: %a" Sexp.pp m
     in
     let response () =
-      Wire.receive client >>= function
+      Wire.receive client |> convert_error >>= function
       | Info (Sexp.List (Sexp.Atom "ok" :: _)) ->
         Log.info (fun m -> m "connected to %a" Message.Address.pp peer_address)
       | Info (Sexp.List [ Sexp.Atom "ko"; Sexp.Atom reason ]) ->
-        Log.debug (fun m ->
-            m "peer %a rejected connection: %s" Message.Address.pp peer_address
-              reason)
+        let* () =
+          Log.debug (fun m ->
+              m "peer %a rejected connection: %s" Message.Address.pp
+                peer_address reason)
+        in
+        Lwt_result.fail @@ Error reason
+      | Info (Sexp.List [ Sexp.Atom "duplicate" ]) ->
+        let* () =
+          Log.debug (fun m ->
+              m "peer %a deems we are already connected" Message.Address.pp
+                peer_address)
+        in
+        Lwt_result.fail Already_connected
       | Info m
       | Query m
       | Response m ->
-        fail "invalid handshake response: %a" Sexp.pp m
+        fail "invalid handshake response: %a" Sexp.pp m |> convert_error
     in
-    let master = Address.O.(state.address < peer_address) in
+    let master = Address.O.(server.address < peer_address) in
     let* () =
-      let ok () = Wire.send client (Info (Sexp.List [ Sexp.Atom "ok" ]))
-      and ko reason =
-        Wire.send client (Info (Sexp.List [ Sexp.Atom "ko"; Sexp.Atom reason ]))
-      in
-      if Map.mem state.peers peer_address then
-        ko "already connected"
+      if Map.mem server.peers peer_address then
+        already_connected ()
       else if master then
         let* () = response () in
         ok ()
@@ -94,21 +139,96 @@ module Make (W : Wire) (M : Message) = struct
         let* () = ok () in
         response ()
     in
-    Lwt_result.return (peer_address, peer_version)
+    let client =
+      {
+        client;
+        client_address = peer_address;
+        client_server = server;
+        query_id = 0;
+        queries = Map.empty (module Int);
+      }
+    in
+    let () =
+      let peers =
+        match Map.add server.peers ~key:peer_address ~data:client with
+        | `Ok map -> map
+        | `Duplicate -> failwith "duplicate peer during handshake"
+      in
+      server.peers <- peers
+    in
+    Lwt_result.return client
 
   let make () = ()
 
+  let serve_client server ({ client_address = address; _ } as client) =
+    let respond server sexp =
+      let* query = Message.query_of_sexp sexp |> Lwt.return in
+      let+ response = server.respond server query in
+      Message.sexp_of_message response
+    and learn server sexp =
+      let* info = Message.info_of_sexp sexp |> Lwt.return in
+      server.learn server info
+    in
+    let rec loop () =
+      Wire.receive client.client >>= function
+      | Query (Sexp.List [ Sexp.Atom id; query ]) ->
+        let* () =
+          Log.debug (fun m ->
+              m "receive query %s from %a: %a" id Address.pp address Sexp.pp
+                query)
+        in
+        let* response = respond server query in
+        let* () =
+          Log.debug (fun m ->
+              m "send response %s to %a: %a" id Address.pp address Sexp.pp
+                response)
+        in
+        let response = Sexp.List [ Sexp.Atom id; response ] in
+        let* () = Wire.send client.client (Wire.Response response) in
+        (loop [@tailcall]) ()
+      | Response (Sexp.List [ Sexp.Atom id; response ]) -> (
+        let* () =
+          Log.debug (fun m ->
+              m "receive response %s from %a: %a" id Address.pp address Sexp.pp
+                response)
+        in
+        match
+          let open Let.Syntax2 (Result) in
+          let* id =
+            try Result.return @@ Int.of_string id
+            with Failure _ -> Result.failf "invalid id: %s" id
+          in
+          match Map.find client.queries id with
+          | Some resolver ->
+            client.queries <- Map.remove client.queries id;
+            Result.return @@ Lwt.wakeup resolver (Result.return response)
+          | None -> Result.failf "unknown id: %i" id
+        with
+        | Result.Ok () -> (loop [@tailcall]) ()
+        | Result.Error e ->
+          let* () = Log.warn (fun m -> m "invalid response: %s" e) in
+          (loop [@tailcall]) () )
+      | Info info ->
+        let* () = learn server info in
+        (loop [@tailcall]) ()
+      | Query q -> fail "invalid query: %a" Sexp.pp q
+      | Response q -> fail "invalid response: %a" Sexp.pp q
+    in
+    loop ()
+
   let serve () ~address ~init ~respond ~learn =
     let wire = Wire.make () in
-    let* server = Wire.bind wire in
-    let* transport =
+    let* wire_server = Wire.bind wire in
+    let* server =
       let tmp =
         {
           address;
           peers = Map.empty (module Address);
           state = State.make ();
-          server;
+          server = wire_server;
           wire;
+          respond = (fun _ _ -> failwith "initialization server");
+          learn = (fun _ _ -> failwith "initialization server");
         }
       in
       let+ state = init tmp in
@@ -116,85 +236,31 @@ module Make (W : Wire) (M : Message) = struct
         {
           address;
           peers = Map.empty (module Address);
-          server;
+          server = wire_server;
           state = State.make state;
           wire;
+          respond;
+          learn;
         }
       in
       let peers =
-        let f peer = { peer with transport = res } in
+        let f peer = { peer with client_server = res } in
         Map.map tmp.peers ~f
       in
       { res with peers }
     in
-    let serve_client client =
-      let* client_address, _ = handshake transport client in
-      let client =
-        {
-          client;
-          client_address;
-          transport;
-          query_id = 0;
-          queries = Map.empty (module Int);
-        }
+    let serve_client server client =
+      let* client =
+        let convert_error = function
+          | Error m -> m
+          | Already_connected -> "already connected"
+        in
+        handshake server client |> Lwt_result.map_err convert_error
       in
-      let respond server sexp =
-        let* query = Message.query_of_sexp sexp |> Lwt.return in
-        let+ response = respond server query in
-        Message.sexp_of_message response
-      and learn server sexp =
-        let* info = Message.info_of_sexp sexp |> Lwt.return in
-        learn server info
-      in
-      let rec loop () =
-        Wire.receive client.client >>= function
-        | Query (Sexp.List [ Sexp.Atom id; query ]) ->
-          let* () =
-            Log.debug (fun m ->
-                m "receive query %s from %a: %a" id Address.pp client_address
-                  Sexp.pp query)
-          in
-          let* response = respond transport query in
-          let* () =
-            Log.debug (fun m ->
-                m "send response %s to %a: %a" id Address.pp client_address
-                  Sexp.pp response)
-          in
-          let response = Sexp.List [ Sexp.Atom id; response ] in
-          let* () = Wire.send client.client (Wire.Response response) in
-          (loop [@tailcall]) ()
-        | Response (Sexp.List [ Sexp.Atom id; response ]) -> (
-          let* () =
-            Log.debug (fun m ->
-                m "receive response %s from %a: %a" id Address.pp client_address
-                  Sexp.pp response)
-          in
-          match
-            let open Let.Syntax2 (Result) in
-            let* id =
-              try Result.return @@ Int.of_string id
-              with Failure _ -> Result.failf "invalid id: %s" id
-            in
-            match Map.find client.queries id with
-            | Some resolver ->
-              client.queries <- Map.remove client.queries id;
-              Result.return @@ Lwt.wakeup resolver (Result.return response)
-            | None -> Result.failf "unknown id: %i" id
-          with
-          | Result.Ok () -> (loop [@tailcall]) ()
-          | Result.Error e ->
-            let* () = Log.warn (fun m -> m "invalid response: %s" e) in
-            (loop [@tailcall]) () )
-        | Info info ->
-          let* () = learn transport info in
-          (loop [@tailcall]) ()
-        | Query q -> fail "invalid query: %a" Sexp.pp q
-        | Response q -> fail "invalid response: %a" Sexp.pp q
-      in
-      loop ()
+      serve_client server client
     in
-    let () = Wire.serve server serve_client in
-    Lwt_result.return transport
+    let () = Wire.serve wire_server (serve_client server) in
+    Lwt_result.return server
 
   let send client query =
     let id = Int.to_string client.query_id in
@@ -234,16 +300,23 @@ module Make (W : Wire) (M : Message) = struct
 
   let state server f = State.run server.state f
 
-  let connect transport endpoint =
-    let* client = Wire.connect transport.wire endpoint in
-    let+ client_address, _ = handshake transport client in
-    {
-      client_address;
-      transport;
-      client;
-      query_id = 0;
-      queries = Map.empty (module Int);
-    }
+  let connect server endpoint =
+    let* client = Wire.connect server.wire endpoint in
+    let open Let.Syntax (Lwt) in
+    handshake server client >>= function
+    | Result.Ok client ->
+      let () =
+        let f () =
+          serve_client server client >>= function
+          | Result.Ok () -> Lwt.return ()
+          | Result.Error msg ->
+            Log.warn_lwt (fun m -> m "%a error: %s" pp_client client msg)
+        in
+        Lwt.async f
+      in
+      Lwt_result.return client
+    | Result.Error (Error m) -> Lwt_result.fail m
+    | Result.Error Already_connected -> failwith "youplaboum"
 
   let endpoint server = Wire.endpoint server.server
 
