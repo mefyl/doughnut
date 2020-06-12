@@ -95,6 +95,8 @@ module type Transport = sig
     ('state -> ('state * 'result, string) Lwt_result.t) ->
     ('result, string) Lwt_result.t
 
+  val address : 'state server -> Message.Address.t
+
   val endpoint : 'state server -> Wire.Endpoint.t
 
   val send :

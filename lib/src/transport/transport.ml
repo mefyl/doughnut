@@ -35,6 +35,13 @@ module Make (W : Wire) (M : Message) = struct
       (Int.t, (Sexp.t, string) Result.t Lwt.u, Int.comparator_witness) Map.t;
   }
 
+  let address { address; _ } = address
+
+  let endpoint server = Wire.endpoint server.server
+
+  let pp_server fmt server =
+    Fmt.pf fmt "node (%a)" Message.Address.pp (address server)
+
   let pp_client fmt { client_address; _ } =
     let f =
       let open Fmt in
@@ -108,19 +115,21 @@ module Make (W : Wire) (M : Message) = struct
     let response () =
       Wire.receive client |> convert_error >>= function
       | Info (Sexp.List (Sexp.Atom "ok" :: _)) ->
-        Log.info (fun m -> m "connected to %a" Message.Address.pp peer_address)
+        Log.info (fun m ->
+            m "%a: connected to %a" pp_server server Message.Address.pp
+              peer_address)
       | Info (Sexp.List [ Sexp.Atom "ko"; Sexp.Atom reason ]) ->
         let* () =
           Log.debug (fun m ->
-              m "peer %a rejected connection: %s" Message.Address.pp
-                peer_address reason)
+              m "%a: peer %a rejected connection: %s" pp_server server
+                Message.Address.pp peer_address reason)
         in
         Lwt_result.fail @@ Error reason
       | Info (Sexp.List [ Sexp.Atom "duplicate" ]) ->
         let* () =
           Log.debug (fun m ->
-              m "peer %a deems we are already connected" Message.Address.pp
-                peer_address)
+              m "%a: peer %a deems we are already connected" pp_server server
+                Message.Address.pp peer_address)
         in
         Lwt_result.fail Already_connected
       | Info m
@@ -174,14 +183,14 @@ module Make (W : Wire) (M : Message) = struct
       | Query (Sexp.List [ Sexp.Atom id; query ]) ->
         let* () =
           Log.debug (fun m ->
-              m "receive query %s from %a: %a" id Address.pp address Sexp.pp
-                query)
+              m "%a: receive query %s from %a: %a" pp_server server id
+                Address.pp address Sexp.pp query)
         in
         let* response = respond server query in
         let* () =
           Log.debug (fun m ->
-              m "send response %s to %a: %a" id Address.pp address Sexp.pp
-                response)
+              m "%a: send response %s to %a: %a" pp_server server id Address.pp
+                address Sexp.pp response)
         in
         let response = Sexp.List [ Sexp.Atom id; response ] in
         let* () = Wire.send client.client (Wire.Response response) in
@@ -189,8 +198,8 @@ module Make (W : Wire) (M : Message) = struct
       | Response (Sexp.List [ Sexp.Atom id; response ]) -> (
         let* () =
           Log.debug (fun m ->
-              m "receive response %s from %a: %a" id Address.pp address Sexp.pp
-                response)
+              m "%a: receive response %s from %a: %a" pp_server server id
+                Address.pp address Sexp.pp response)
         in
         match
           let open Let.Syntax2 (Result) in
@@ -206,7 +215,9 @@ module Make (W : Wire) (M : Message) = struct
         with
         | Result.Ok () -> (loop [@tailcall]) ()
         | Result.Error e ->
-          let* () = Log.warn (fun m -> m "invalid response: %s" e) in
+          let* () =
+            Log.warn (fun m -> m "%a: invalid response: %s" pp_server server e)
+          in
           (loop [@tailcall]) () )
       | Info info ->
         let* () = learn server info in
@@ -267,8 +278,8 @@ module Make (W : Wire) (M : Message) = struct
     let query = Sexp.List [ Sexp.Atom id; Message.sexp_of_message query ] in
     let* () =
       Log.debug (fun m ->
-          m "send query %s to %a: %a" id Message.Address.pp
-            client.client_address Sexp.pp query)
+          m "%a: send query %s to %a: %a" pp_server client.client_server id
+            pp_client client Sexp.pp query)
     in
     let id =
       client.query_id <- client.query_id + 1;
@@ -284,8 +295,8 @@ module Make (W : Wire) (M : Message) = struct
     let* response = wait in
     let* () =
       Log.debug (fun m ->
-          m "response from %a: %a" Message.Address.pp client.client_address
-            Sexp.pp response)
+          m "%a: response from %a: %a" pp_server client.client_server
+            Message.Address.pp client.client_address Sexp.pp response)
     in
     Lwt.return @@ Message.response_of_sexp response
 
@@ -293,8 +304,8 @@ module Make (W : Wire) (M : Message) = struct
     let info = Message.sexp_of_message info in
     let* () =
       Log.info (fun m ->
-          m "inform %a: %a\n%!" Message.Address.pp client.client_address Sexp.pp
-            info)
+          m "%a: inform %a: %a\n%!" pp_server client.client_server pp_client
+            client Sexp.pp info)
     in
     Wire.send client.client (Wire.Info info)
 
@@ -310,15 +321,14 @@ module Make (W : Wire) (M : Message) = struct
           serve_client server client >>= function
           | Result.Ok () -> Lwt.return ()
           | Result.Error msg ->
-            Log.warn_lwt (fun m -> m "%a error: %s" pp_client client msg)
+            Log.warn_lwt (fun m ->
+                m "%a: %a error: %s" pp_server server pp_client client msg)
         in
         Lwt.async f
       in
       Lwt_result.return client
     | Result.Error (Error m) -> Lwt_result.fail m
     | Result.Error Already_connected -> failwith "youplaboum"
-
-  let endpoint server = Wire.endpoint server.server
 
   let wait server = Wire.wait server.server
 
