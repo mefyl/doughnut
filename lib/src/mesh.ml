@@ -5,17 +5,17 @@ module type S = sig
 
   module Transport : Transport.Transport
 
+  module Endpoint = Transport.Wire.Endpoint
+
   type node
 
-  type endpoint = Transport.endpoint
-
   val make :
-    ?started:(Transport.Wire.Endpoint.t -> (unit, string) Lwt_result.t) ->
     Address.t ->
-    endpoint list ->
+    ?started:(Transport.Wire.Endpoint.t -> (unit, string) Lwt_result.t) ->
+    Endpoint.t list ->
     (node, string) Lwt_result.t
 
-  val endpoint : node -> endpoint
+  val endpoint : node -> Endpoint.t
 
   val wait : node -> (unit, string) Lwt_result.t
 

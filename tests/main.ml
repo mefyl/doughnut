@@ -100,28 +100,23 @@ module Transport = struct
     stats : stats;
   }
 
-  type nonrec client = {
+  type nonrec 'state server = {
+    server : 'state server;
     t : t;
-    client : client;
   }
 
-  let wire t = wire t.wrapped
+  type nonrec 'state client = {
+    client : 'state client;
+    t : t;
+  }
 
-  let make_details address query_filter =
-    {
-      wrapped = make address;
-      query_filter;
-      query = Rpc.make ();
-      stats = { filtered = 0 };
-    }
+  let make_details query_filter =
+    let stats = { filtered = 0 }
+    and query = Rpc.make ()
+    and wrapped = make () in
+    { wrapped; query_filter; query; stats }
 
-  let make address = make_details address (fun _ _ -> false)
-
-  let connect t ep =
-    let+ client = connect t.wrapped ep in
-    { client; t }
-
-  let serve ~init ~respond ~learn t = serve ~init ~respond ~learn t.wrapped
+  let make () = make_details (fun _ _ -> false)
 
   let send { client; t } m =
     if t.query_filter t.stats m then (
@@ -133,6 +128,25 @@ module Transport = struct
       send client m
 
   let inform client = inform client.client
+
+  let serve ({ wrapped; _ } as t) ~address ~init ~respond ~learn =
+    let init server = init { server; t }
+    and respond server = respond { server; t }
+    and learn server = learn { server; t } in
+    let+ server = serve wrapped ~address ~init ~respond ~learn in
+    { server; t }
+
+  let connect { server; t } endpoint =
+    let+ client = connect server endpoint in
+    { client; t }
+
+  let endpoint { server; _ } = endpoint server
+
+  let state { server; _ } = state server
+
+  let stop { server; _ } = stop server
+
+  let wait { server; _ } = wait server
 end
 
 module Dht = Doughnut.Chord.MakeDetails (Address) (Wire) (Transport)
@@ -196,23 +210,21 @@ let chord_join_race order () =
       | ChordMessage.Hello _ -> filtered = 0
       | _ -> false )
   in
-  let transport_a = Transport.make_details 10 filter
-  and transport_b = Transport.make_details 20 filter in
-  let make_dht (transport, addr, pred) =
+  let transport_a = Transport.make_details filter
+  and transport_b = Transport.make_details filter in
+  let make_dht transport addr pred =
     let* dht = Dht.make_details addr transport eps in
     let+ predecessor = Dht.predecessor dht in
     let () = Alcotest.(check address "predecessor" pred predecessor) in
     dht
   in
-  let dht_a = make_dht (transport_a, 10, 0)
+  let dht_a = make_dht transport_a 10 0
   and dht_b =
-    make_dht
-      ( transport_b,
-        20,
-        if order then
-          10
-        else
-          0 )
+    make_dht transport_b 20
+      ( if order then
+        10
+      else
+        0 )
   in
   let* qa = Lwt.map ~f:Result.return (Rpc.receive transport_a.query)
   and* qb = Lwt.map ~f:Result.return (Rpc.receive transport_b.query) in
@@ -257,7 +269,7 @@ let chord_fix_index_overshoot () =
         false
       | _ -> false
     in
-    let transport = Transport.make_details addr filter in
+    let transport = Transport.make_details filter in
     Dht.make_details addr transport
   in
   (* Setup so dht_0 wrongfully thinks dht_2 is its successor. *)
@@ -294,7 +306,7 @@ let chord_complexity () =
             false
           | _ -> false
         in
-        let transport = Transport.make_details address filter in
+        let transport = Transport.make_details filter in
         let* dht = Dht.make_details address transport endpoints in
         Lwt_result.return (Dht.endpoint dht :: endpoints, dht))
   in

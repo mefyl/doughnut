@@ -9,34 +9,27 @@ module Make (W : Wire) (M : Message) = struct
   module Message = M
   module Wire = W
 
-  type t = {
+  type t = unit
+
+  type 'state server = {
     address : Message.Address.t;
+    mutable peers :
+      (Address.t, 'state client, Address.comparator_witness) Map.t;
+    server : Wire.server;
+    state : 'state State.t;
     wire : Wire.t;
-    mutable peers : (Address.t, client, Address.comparator_witness) Map.t;
   }
 
-  and client = {
-    client_transport : t;
+  and 'state client = {
     client : Wire.client;
+    client_address : Message.Address.t;
+    transport : 'state server;
     mutable query_id : int;
     mutable queries :
       (Int.t, (Sexp.t, string) Result.t Lwt.u, Int.comparator_witness) Map.t;
   }
 
-  and 'state server = {
-    server_transport : t;
-    server : Wire.server;
-    state : 'state State.t;
-  }
-
-  type endpoint = Wire.Endpoint.t
-
-  let wire { wire; _ } = wire
-
-  let make address =
-    { address; wire = Wire.make (); peers = Map.empty (module Address) }
-
-  let handshake t client =
+  let handshake state client =
     let* () =
       Wire.send client
         (Info
@@ -46,7 +39,7 @@ module Make (W : Wire) (M : Message) = struct
                 Sexp.Atom Message.name;
                 Sexp.Atom (Semver.to_string Message.version);
                 (* FIXME: check address format compatibility *)
-                Message.Address.sexp_of t.address;
+                Message.Address.sexp_of state.address;
               ]))
     in
     let* peer_address, peer_version =
@@ -75,7 +68,7 @@ module Make (W : Wire) (M : Message) = struct
     in
     let response () =
       Wire.receive client >>= function
-      | Info (Sexp.List [ Sexp.Atom "ok"; _ ]) ->
+      | Info (Sexp.List (Sexp.Atom "ok" :: _)) ->
         Log.info (fun m -> m "connected to %a" Message.Address.pp peer_address)
       | Info (Sexp.List [ Sexp.Atom "ko"; Sexp.Atom reason ]) ->
         Log.debug (fun m ->
@@ -86,13 +79,13 @@ module Make (W : Wire) (M : Message) = struct
       | Response m ->
         fail "invalid handshake response: %a" Sexp.pp m
     in
-    let master = Address.O.(t.address < peer_address) in
+    let master = Address.O.(state.address < peer_address) in
     let* () =
       let ok () = Wire.send client (Info (Sexp.List [ Sexp.Atom "ok" ]))
       and ko reason =
         Wire.send client (Info (Sexp.List [ Sexp.Atom "ko"; Sexp.Atom reason ]))
       in
-      if Map.mem t.peers peer_address then
+      if Map.mem state.peers peer_address then
         ko "already connected"
       else if master then
         let* () = response () in
@@ -103,44 +96,79 @@ module Make (W : Wire) (M : Message) = struct
     in
     Lwt_result.return (peer_address, peer_version)
 
-  let serve ~init ~respond ~learn transport =
+  let make () = ()
+
+  let serve () ~address ~init ~respond ~learn =
     let wire = Wire.make () in
     let* server = Wire.bind wire in
-    let endpoint = Wire.endpoint server in
-    let* state =
-      let+ state = init endpoint in
-      State.make state
+    let* transport =
+      let tmp =
+        {
+          address;
+          peers = Map.empty (module Address);
+          state = State.make ();
+          server;
+          wire;
+        }
+      in
+      let+ state = init tmp in
+      let res =
+        {
+          address;
+          peers = Map.empty (module Address);
+          server;
+          state = State.make state;
+          wire;
+        }
+      in
+      let peers =
+        let f peer = { peer with transport = res } in
+        Map.map tmp.peers ~f
+      in
+      { res with peers }
     in
-    let res = { server_transport = transport; server; state } in
     let serve_client client =
+      let* client_address, _ = handshake transport client in
       let client =
         {
-          client_transport = transport;
           client;
+          client_address;
+          transport;
           query_id = 0;
           queries = Map.empty (module Int);
         }
       in
-      let* _peer_address, _ = handshake transport client.client in
-      let respond state sexp =
+      let respond server sexp =
         let* query = Message.query_of_sexp sexp |> Lwt.return in
-        let+ state, response = respond state query in
-        (state, Message.sexp_of_message response)
-      and learn state sexp =
+        let+ response = respond server query in
+        Message.sexp_of_message response
+      and learn server sexp =
         let* info = Message.info_of_sexp sexp |> Lwt.return in
-        learn state info
+        learn server info
       in
       let rec loop () =
         Wire.receive client.client >>= function
         | Query (Sexp.List [ Sexp.Atom id; query ]) ->
-          let* response =
-            let action state = respond state query in
-            State.run state action
+          let* () =
+            Log.debug (fun m ->
+                m "receive query %s from %a: %a" id Address.pp client_address
+                  Sexp.pp query)
+          in
+          let* response = respond transport query in
+          let* () =
+            Log.debug (fun m ->
+                m "send response %s to %a: %a" id Address.pp client_address
+                  Sexp.pp response)
           in
           let response = Sexp.List [ Sexp.Atom id; response ] in
           let* () = Wire.send client.client (Wire.Response response) in
           (loop [@tailcall]) ()
         | Response (Sexp.List [ Sexp.Atom id; response ]) -> (
+          let* () =
+            Log.debug (fun m ->
+                m "receive response %s from %a: %a" id Address.pp client_address
+                  Sexp.pp response)
+          in
           match
             let open Let.Syntax2 (Result) in
             let* id =
@@ -158,13 +186,7 @@ module Make (W : Wire) (M : Message) = struct
             let* () = Log.warn (fun m -> m "invalid response: %s" e) in
             (loop [@tailcall]) () )
         | Info info ->
-          let* () =
-            let action state =
-              let+ state = learn state info in
-              (state, ())
-            in
-            State.run state action
-          in
+          let* () = learn transport info in
           (loop [@tailcall]) ()
         | Query q -> fail "invalid query: %a" Sexp.pp q
         | Response q -> fail "invalid response: %a" Sexp.pp q
@@ -172,15 +194,15 @@ module Make (W : Wire) (M : Message) = struct
       loop ()
     in
     let () = Wire.serve server serve_client in
-    Lwt_result.return res
+    Lwt_result.return transport
 
   let send client query =
-    let query =
-      Sexp.List
-        [
-          Sexp.Atom (Int.to_string client.query_id);
-          Message.sexp_of_message query;
-        ]
+    let id = Int.to_string client.query_id in
+    let query = Sexp.List [ Sexp.Atom id; Message.sexp_of_message query ] in
+    let* () =
+      Log.debug (fun m ->
+          m "send query %s to %a: %a" id Message.Address.pp
+            client.client_address Sexp.pp query)
     in
     let id =
       client.query_id <- client.query_id + 1;
@@ -194,17 +216,30 @@ module Make (W : Wire) (M : Message) = struct
     in
     let* () = Wire.send client.client @@ Wire.Query query in
     let* response = wait in
+    let* () =
+      Log.debug (fun m ->
+          m "response from %a: %a" Message.Address.pp client.client_address
+            Sexp.pp response)
+    in
     Lwt.return @@ Message.response_of_sexp response
 
   let inform client info =
-    Wire.send client.client (Wire.Info (Message.sexp_of_message info))
+    let info = Message.sexp_of_message info in
+    let* () =
+      Log.info (fun m ->
+          m "inform %a: %a\n%!" Message.Address.pp client.client_address Sexp.pp
+            info)
+    in
+    Wire.send client.client (Wire.Info info)
 
   let state server f = State.run server.state f
 
   let connect transport endpoint =
-    let+ client = Wire.connect (wire transport) endpoint in
+    let* client = Wire.connect transport.wire endpoint in
+    let+ client_address, _ = handshake transport client in
     {
-      client_transport = transport;
+      client_address;
+      transport;
       client;
       query_id = 0;
       queries = Map.empty (module Int);

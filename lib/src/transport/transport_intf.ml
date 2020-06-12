@@ -7,21 +7,7 @@ module type Wire = sig
 
   type server
 
-  module Endpoint : sig
-    type t
-
-    val pp : Formatter.t -> t -> unit
-
-    val to_string : t -> string
-
-    val of_string : string -> (t, string) Result.t
-
-    val to_sexp : t -> Sexp.t
-
-    val of_sexp : Sexp.t -> (t, string) Result.t
-
-    val compare : t -> t -> int
-  end
+  module Endpoint : Endpoint.S
 
   val make : unit -> t
 
@@ -82,41 +68,41 @@ module type Transport = sig
 
   module Wire : Wire
 
-  type 'state server
-
-  type client
-
-  type endpoint = Wire.Endpoint.t
-
   type t
 
-  val wire : t -> Wire.t
+  type 'state server
 
-  val make : Message.Address.t -> t
+  type 'state client
 
-  val connect : t -> endpoint -> (client, string) Lwt_result.t
+  val make : unit -> t
 
   val serve :
-    init:(endpoint -> ('state, string) Lwt_result.t) ->
-    respond:
-      ('state ->
-      query Message.t ->
-      ('state * response Message.t, string) Lwt_result.t) ->
-    learn:('state -> info Message.t -> ('state, string) Lwt_result.t) ->
     t ->
+    address:Message.Address.t ->
+    init:(unit server -> ('state, string) Lwt_result.t) ->
+    respond:
+      ('state server ->
+      query Message.t ->
+      (response Message.t, string) Lwt_result.t) ->
+    learn:('state server -> info Message.t -> (unit, string) Lwt_result.t) ->
     ('state server, string) Lwt_result.t
+
+  val connect :
+    'state server -> Wire.Endpoint.t -> ('state client, string) Lwt_result.t
 
   val state :
     'state server ->
     ('state -> ('state * 'result, string) Lwt_result.t) ->
     ('result, string) Lwt_result.t
 
-  val endpoint : _ server -> endpoint
+  val endpoint : 'state server -> Wire.Endpoint.t
 
   val send :
-    client -> query Message.t -> (response Message.t, string) Lwt_result.t
+    'state client ->
+    query Message.t ->
+    (response Message.t, string) Lwt_result.t
 
-  val inform : client -> info Message.t -> (unit, string) Lwt_result.t
+  val inform : 'state client -> info Message.t -> (unit, string) Lwt_result.t
 
   val wait : 'state server -> (unit, string) Lwt_result.t
 
